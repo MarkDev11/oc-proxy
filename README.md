@@ -64,6 +64,20 @@ curl -N https://<app>.vercel.app/v1/chat/completions \
        "tool_choice":"auto","stream":true}'
 ```
 
+## Long tasks (no mid-token cutoffs)
+
+Serverless functions die hard at `maxDuration`, mid-token. This proxy avoids
+that: `SOFT_DEADLINE_MS` (default 50000, counted from the first upstream
+bytes so slow TTFB doesn't eat the budget) plus `ABSOLUTE_DEADLINE_MS`
+(default 55000, final failsafe) stop reading upstream early and close the
+response gracefully with `finish_reason: "length"` (or `"tool_calls"` if a
+tool call already completed). Agent loops treat `"length"` as "continue the
+turn", append the partial output, and resend — so long coding tasks survive
+as a chain of short requests instead of one killed stream.
+
+Tune per plan: Hobby (short limit) -> lower `SOFT_DEADLINE_MS`; Pro ->
+raise both `maxDuration` and the deadline.
+
 ## Local check
 
 ```bash

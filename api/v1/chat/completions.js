@@ -109,12 +109,38 @@ module.exports = async function handler(req, res) {
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
 
+  // Soft deadline: close gracefully with finish_reason "length" BEFORE the
+  // platform kills the function mid-token, so agent loops auto-continue.
+  // The per-content deadline runs from the FIRST upstream bytes (slow TTFB
+  // must not eat the whole budget); the absolute cap is the final failsafe.
+  // Both must stay below the function maxDuration (vercel.json).
+  const startedAt = Date.now();
+  const softMs = Math.max(1000, parseInt(process.env.SOFT_DEADLINE_MS || "50000", 10) || 50000);
+  const absMs = Math.max(softMs, parseInt(process.env.ABSOLUTE_DEADLINE_MS || "55000", 10) || 55000);
+  let firstBytesAt = 0;
+  const expired = () => {
+    const t = Date.now();
+    if (t - startedAt > absMs) return true;
+    return firstBytesAt > 0 && t - firstBytesAt > softMs;
+  };
+  const cutOff = () => {
+    tr.markCutoff();
+    try {
+      reader.cancel();
+    } catch {}
+  };
+
   if (!clientWantsStream) {
     try {
       let buf = "";
       for (;;) {
+        if (expired()) {
+          cutOff();
+          break;
+        }
         const { done, value } = await reader.read();
         if (done) break;
+        if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
         buf += decoder.decode(value, { stream: true });
         const { frames, rest } = splitFrames(buf);
         buf = rest;
@@ -159,8 +185,13 @@ module.exports = async function handler(req, res) {
   try {
     let buf = "";
     for (;;) {
+      if (expired()) {
+        cutOff();
+        break;
+      }
       const { done, value } = await reader.read();
       if (done) break;
+      if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
       buf += decoder.decode(value, { stream: true });
       const { frames, rest } = splitFrames(buf);
       buf = rest;
