@@ -1,0 +1,13 @@
+{
+  "name": "oc-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin OpenAI-compatible proxy for opencode.ai zen free tier (muse-spark), Vercel-ready. Logic ported from 9Router PR #4165.",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "check": "node --check lib/opencode.js && node --check api/v1/models.js && node --check \"api/v1/chat/completions.js\" && node --check api/health.js && echo OK"
+  }
+}
