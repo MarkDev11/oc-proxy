@@ -17,11 +17,12 @@ SSE stream back to OpenAI `chat.completions` format.
 
 Option A — dashboard:
 
-1. Push folder ini ke repo Git baru.
-2. Vercel -> Add New Project -> import repo. Framework preset: Other.
-3. Env (optional tapi disarankan): `GATEWAY_API_KEY=sk-...` (boleh CSV multi-key).
+1. Push this folder to a new Git repo.
+2. Vercel -> Add New Project -> import the repo. Framework preset: Other.
+3. Env (optional but recommended): `GATEWAY_API_KEY=sk-...` (comma-separated
+   multi-key supported).
 4. Deploy. Base URL: `https://<app>.vercel.app/v1`
-   (`vercel.json` me-rewrite `/v1/*` -> `/api/v1/*`).
+   (`vercel.json` rewrites `/v1/*` -> `/api/v1/*`).
 
 Option B — CLI:
 
@@ -32,31 +33,31 @@ vercel env add GATEWAY_API_KEY
 vercel --prod
 ```
 
-Catatan `maxDuration: 60` di `vercel.json` hanya full di plan Pro.
-Di Hobby, durasi function dibatasi plan — request agentik panjang bisa
-kepotong. Untuk run panjang, pertimbangkan HF Space / VPS.
+Note: `maxDuration: 60` in `vercel.json` only fully applies on the Pro plan.
+On Hobby, function duration is plan-limited — very long agentic runs may get
+cut off. For long runs, consider an HF Space / VPS instead.
 
 ## Endpoints
 
-* `GET /v1/models` — list 4 id (`oc/` alias + bare).
+* `GET /v1/models` — lists 4 ids (`oc/` alias + bare).
 * `POST /v1/chat/completions` — OpenAI shape (`messages`, `tools`,
-  `tool_choice`, `stream`). Hanya 2 model free yang diterima (400 jika lain).
-* `GET /api/health` — cek deploy.
+  `tool_choice`, `stream`). Only the two free models are accepted (400 otherwise).
+* `GET /api/health` — deployment check.
 
-Contoh:
+Examples:
 
 ```bash
 curl https://<app>.vercel.app/v1/chat/completions \
   -H "Authorization: Bearer $GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"oc/muse-spark-1.3-contributor-free",
-       "messages":[{"role":"user","content":"jawab OK"}]}'
+       "messages":[{"role":"user","content":"reply OK"}]}'
 
 curl -N https://<app>.vercel.app/v1/chat/completions \
   -H "Authorization: Bearer $GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"model":"oc/muse-spark-1.2-contributor-free",
-       "messages":[{"role":"user","content":"Cuaca Jakarta?"}],
+       "messages":[{"role":"user","content":"Weather in Jakarta?"}],
        "tools":[{"type":"function","function":{
          "name":"get_weather",
          "parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}],
@@ -69,12 +70,13 @@ curl -N https://<app>.vercel.app/v1/chat/completions \
 npm run check
 ```
 
-## Peringatan
+## Caveats
 
-* Free tier upstream agresif rate-limit (`429 FreeUsageLimitError`) — normal,
-  retry dengan jeda.
-* Cloak decoy pada dasarnya memalsukan cek `within OpenCode`. Jangan expose
-  publik tanpa `GATEWAY_API_KEY` + rate limit sendiri; sewaktu-waktu bisa
-  diblok upstream.
-* File ini port dari bundle 9Router v0.5.81 + PR #4165 (belum merge saat
-  ditulis). Jika upstream mengubah kontrak Responses, proxy harus ikut update.
+* The upstream free tier rate-limits aggressively (`429 FreeUsageLimitError`) —
+  that's normal, retry with backoff.
+* The decoy cloak essentially spoofs the `within OpenCode` check. Don't expose
+  publicly without `GATEWAY_API_KEY` + your own rate limiting; upstream may
+  block it at any time.
+* Ported from the 9Router v0.5.81 bundle + PR #4165 (unmerged at time of
+  writing). If upstream changes the Responses contract, this proxy must be
+  updated too.
