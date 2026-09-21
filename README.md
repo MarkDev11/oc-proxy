@@ -78,10 +78,26 @@ as a chain of short requests instead of one killed stream.
 Tune per plan: Hobby (short limit) -> lower `SOFT_DEADLINE_MS`; Pro ->
 raise both `maxDuration` and the deadline.
 
+## Proxy fallback (optional, for 429s)
+
+When `PROXY_FALLBACK=1` and `PROXY_POOL_URL` point to a fresh pool (maintained
+by GitHub Actions on the `pool` branch, every 15 min), the proxy retries
+once via a healthy HTTP proxy **only** on retryable upstream failures
+(`429`/`502`/`503`). Normal requests stay direct — no added latency. Pool
+entries older than 1 hour or transparent proxies are discarded; failed
+proxies are cooled down for 30 min.
+
+```bash
+PROXY_FALLBACK=1
+PROXY_POOL_URL=https://cdn.jsdelivr.net/gh/MarkDev11/oc-proxy@pool/pool.json
+PROXY_TIMEOUT_MS=25000
+```
+
 ## Local check
 
 ```bash
 npm run check
+node scripts/validate-pool.js  # writes pool.json locally for testing
 ```
 
 ## Caveats

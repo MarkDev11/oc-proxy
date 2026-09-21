@@ -8,6 +8,6 @@
   },
   "scripts": {
     "dev": "vercel dev",
-    "check": "node --check lib/opencode.js && node --check api/v1/models.js && node --check \"api/v1/chat/completions.js\" && node --check api/health.js && echo OK"
+    "check": "node --check lib/opencode.js && node --check lib/proxy.js && node --check api/v1/models.js && node --check \"api/v1/chat/completions.js\" && node --check api/health.js && node --check scripts/validate-pool.js && echo OK"
   }
 }

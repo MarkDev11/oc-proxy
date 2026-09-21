@@ -17,6 +17,7 @@ const {
   parseFrame,
   createTranslator,
 } = require("../../../lib/opencode");
+const proxy = require("../../../lib/proxy");
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -44,6 +45,45 @@ function readJson(req) {
     });
     req.on("error", reject);
   });
+}
+
+const RETRYABLE = new Set([429, 502, 503]);
+
+async function fetchWithFallback(url, { headers, body }) {
+  let direct = null;
+  let directErr = null;
+  try {
+    direct = await fetch(url, { method: "POST", headers, body });
+    if (direct.ok || !proxy.fallbackEnabled() || !RETRYABLE.has(direct.status)) return direct;
+    try {
+      directErr = { status: direct.status, text: await direct.text() };
+    } catch {
+      directErr = { status: direct.status, text: "" };
+    }
+  } catch (e) {
+    if (!proxy.fallbackEnabled()) throw e;
+  }
+  const pool = await proxy.loadPool();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const p = proxy.pickProxy(pool);
+    if (!p) break;
+    try {
+      const r = await proxy.postViaProxy(p.url, url, { headers, body, timeout: proxy.timeoutMs() });
+      if (r.ok || !RETRYABLE.has(r.status)) {
+        return { ok: r.ok, status: r.status, body: r.stream, text: r.text, headers: r.headers || {} };
+      }
+      try {
+        await r.text().catch(() => {});
+      } catch {}
+      proxy.coolDown(p.url);
+    } catch {
+      proxy.coolDown(p.url);
+    }
+  }
+  if (directErr) {
+    return { ok: false, status: directErr.status, body: null, text: async () => directErr.text, headers: {} };
+  }
+  throw new Error("upstream unreachable and proxy fallback exhausted");
 }
 
 async function forwardUpstreamError(upstream) {
@@ -96,7 +136,7 @@ module.exports = async function handler(req, res) {
 
   let upstream;
   try {
-    upstream = await fetch(upstreamUrl(), { method: "POST", headers, body: JSON.stringify(upBody) });
+    upstream = await fetchWithFallback(upstreamUrl(), { headers, body: JSON.stringify(upBody) });
   } catch (e) {
     return res.status(502).json({ error: { message: `upstream unreachable: ${e.message}` } });
   }

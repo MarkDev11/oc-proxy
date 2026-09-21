@@ -1,0 +1,42 @@
+name: pool
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pool
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout pool branch
+        run: |
+          git fetch origin pool 2>/dev/null || true
+          git checkout pool 2>/dev/null || git checkout -b pool
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate proxies
+        run: node scripts/validate-pool.js
+        working-directory: ${{ github.workspace }}
+
+      - name: Commit pool.json
+        run: |
+          git config user.name "pool-bot"
+          git config user.email "pool-bot@users.noreply.github.com"
+          git add -f pool.json
+          git diff --cached --quiet || (git commit -m "pool: update $(date -u +%FT%TZ)" && git push origin pool)
