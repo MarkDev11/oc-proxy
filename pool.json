@@ -1,12 +1,18 @@
 {
-  "updatedAt": "2026-09-22T16:57:50.325Z",
-  "cursor": 600,
+  "updatedAt": "2026-09-22T20:00:08.431Z",
+  "cursor": 660,
   "proxies": [
     {
       "url": "http://95.211.174.135:3128",
-      "latencyMs": 607,
+      "latencyMs": 467,
       "anon": "anonymous",
-      "checkedAt": "2026-09-22T16:57:50.325Z"
+      "checkedAt": "2026-09-22T20:00:08.431Z"
+    },
+    {
+      "url": "http://46.8.43.28:3128",
+      "latencyMs": 992,
+      "anon": "anonymous",
+      "checkedAt": "2026-09-22T20:00:08.431Z"
     }
   ]
 }
