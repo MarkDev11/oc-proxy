@@ -1,24 +1,24 @@
 {
-  "updatedAt": "2026-09-28T19:39:40.947Z",
-  "cursor": 2820,
+  "updatedAt": "2026-09-28T23:56:05.777Z",
+  "cursor": 2880,
   "proxies": [
     {
       "url": "http://95.211.174.135:3128",
-      "latencyMs": 653,
+      "latencyMs": 490,
       "anon": "anonymous",
-      "checkedAt": "2026-09-28T19:39:40.947Z"
-    },
-    {
-      "url": "http://172.236.242.244:3128",
-      "latencyMs": 660,
-      "anon": "anonymous",
-      "checkedAt": "2026-09-28T19:39:40.947Z"
+      "checkedAt": "2026-09-28T23:56:05.777Z"
     },
     {
       "url": "http://103.237.102.191:11111",
-      "latencyMs": 747,
+      "latencyMs": 533,
       "anon": "anonymous",
-      "checkedAt": "2026-09-28T19:39:40.947Z"
+      "checkedAt": "2026-09-28T23:56:05.777Z"
+    },
+    {
+      "url": "http://172.236.242.244:3128",
+      "latencyMs": 1570,
+      "anon": "anonymous",
+      "checkedAt": "2026-09-28T23:56:05.777Z"
     }
   ]
 }
