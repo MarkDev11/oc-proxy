@@ -1,17 +1,26 @@
 # oc-proxy
 
-Thin OpenAI-compatible proxy for the **opencode.ai zen free tier**
-(`muse-spark-1.3-contributor-free`, `muse-spark-1.2-contributor-free`).
-Vercel-ready, zero dependencies. Logic ported from 9Router PR #4165.
+Thin OpenAI-compatible proxy for the **opencode.ai free tier** (every `*-free`
+model: `muse-spark-1.3-contributor-free`, `deepseek-v4.1-flash-free`,
+`mimo-v2.6-flash-free`, ...). Vercel-ready, zero dependencies. Logic ported
+from 9Router (PR #4842 opencode v2 fingerprint).
 
 ## Why this exists
 
-Upstream `POST https://opencode.ai/zen/v1/responses` returns
-`403 FreeTierError (...only be used from within OpenCode)` unless **every**
-Responses request carries both `bash` + `read` function tools **and**
-`tool_choice: "auto"`. This proxy injects those decoys unconditionally
-(plus forces `auto` on the two free models), then translates the Responses
-SSE stream back to OpenAI `chat.completions` format.
+Since 2026-10-14, OpenCode v2 moved free inference off `/zen/v1` onto
+`/inference/v1` and every free request returns
+`403 FreeTierError (...only be used from within OpenCode)` unless it carries
+OpenCode's own client fingerprint. This proxy reproduces that fingerprint
+unconditionally, then translates back to OpenAI `chat.completions`:
+
+* Endpoint `/inference/v1/responses` (muse-spark) or
+  `/inference/v1/chat/completions` (all other `*-free` models).
+* v2 UA `opencode/latest/2.0.26/cli` + `x-opencode-session` **and**
+  `x-opencode-session-id` (a session id whose prefix encodes a small counter).
+* OpenCode's exact `read` + `shell` tool definitions (description + schema are
+  compared verbatim upstream) as decoys, with `tool_choice` forced to `auto`.
+  A caller tool already named `read`/`shell` with a different definition is
+  aliased to `read_client`/`shell_client` and restored on the response.
 
 ## Deploy (Vercel)
 
@@ -39,9 +48,10 @@ cut off. For long runs, consider an HF Space / VPS instead.
 
 ## Endpoints
 
-* `GET /v1/models` — lists 4 ids (`oc/` alias + bare).
+* `GET /v1/models` — lists every `*-free` opencode model (`id` + `oc/` alias),
+  fetched live from upstream and cached 5 min.
 * `POST /v1/chat/completions` — OpenAI shape (`messages`, `tools`,
-  `tool_choice`, `stream`). Only the two free models are accepted (400 otherwise).
+  `tool_choice`, `stream`). Any `*-free` model is accepted (400 otherwise).
 * `GET /api/health` — deployment check.
 
 Examples:
@@ -107,6 +117,6 @@ node scripts/validate-pool.js  # writes pool.json locally for testing
 * The decoy cloak essentially spoofs the `within OpenCode` check. Don't expose
   publicly without `GATEWAY_API_KEY` + your own rate limiting; upstream may
   block it at any time.
-* Ported from the 9Router v0.5.81 bundle + PR #4165 (unmerged at time of
-  writing). If upstream changes the Responses contract, this proxy must be
-  updated too.
+* Ported from 9Router's opencode executor + fingerprint (PR #4842). If upstream
+  changes the `/inference/v1` contract or the fingerprint tools, this proxy
+  must be updated too.
