@@ -7,15 +7,13 @@ const {
   cors,
   checkAuth,
   isAllowedModel,
-  baseModel,
   buildUpstreamBody,
   buildHeaders,
   upstreamUrl,
   newSessionId,
-  newRequestId,
   splitFrames,
   parseFrame,
-  createTranslator,
+  makeTranslator,
 } = require("../../../lib/opencode");
 const proxy = require("../../../lib/proxy");
 
@@ -114,7 +112,7 @@ module.exports = async function handler(req, res) {
   if (!chatBody.model || !isAllowedModel(chatBody.model)) {
     return res.status(400).json({
       error: {
-        message: `unsupported model '${chatBody.model}'. Use oc/muse-spark-1.3-contributor-free or oc/muse-spark-1.2-contributor-free.`,
+        message: `unsupported model '${chatBody.model}'. Use any *-free opencode model (e.g. oc/muse-spark-1.3-contributor-free, deepseek-v4.1-flash-free).`,
       },
     });
   }
@@ -122,21 +120,23 @@ module.exports = async function handler(req, res) {
   const clientWantsStream = chatBody.stream === true;
   const displayModel = String(chatBody.model);
   let upBody;
+  let renameMap;
   try {
-    upBody = buildUpstreamBody(chatBody);
+    const built = buildUpstreamBody(chatBody);
+    upBody = built.body;
+    renameMap = built.map;
   } catch (e) {
     return res.status(400).json({ error: { message: e.message } });
   }
 
   const headers = buildHeaders({
     sessionId: req.headers["x-opencode-session"] || newSessionId(),
-    requestId: newRequestId(),
     userAgent: req.headers["user-agent"],
   });
 
   let upstream;
   try {
-    upstream = await fetchWithFallback(upstreamUrl(), { headers, body: JSON.stringify(upBody) });
+    upstream = await fetchWithFallback(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
   } catch (e) {
     return res.status(502).json({ error: { message: `upstream unreachable: ${e.message}` } });
   }
@@ -145,7 +145,7 @@ module.exports = async function handler(req, res) {
     return res.status(err.status).json(err.body);
   }
 
-  const tr = createTranslator(displayModel);
+  const tr = makeTranslator(displayModel, renameMap);
   const reader = upstream.body.getReader();
   const decoder = new TextDecoder();
 
