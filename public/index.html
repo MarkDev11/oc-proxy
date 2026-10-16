@@ -104,7 +104,7 @@ ul{padding-left:18px}li{margin:6px 0}
 </div>
 <div class="card"><h3>Models</h3>
 <div class="tbl"><table><thead><tr><th>MODEL</th><th>REQUESTS</th><th>ERRORS</th><th>PROMPT</th><th>OUTPUT</th></tr></thead><tbody id="modB"><tr><td colspan="5" class="sub">no requests yet</td></tr></tbody></table></div>
-<div class="sub" style="margin-top:6px">In-memory per instance — resets on cold start. Nothing is stored anywhere.</div>
+<div class="sub" id="poolTx" style="margin-top:6px">fallback pool: …</div>
 </div>
 </div>
 
@@ -178,12 +178,15 @@ function renderStats(S){
  $("rcN").textContent=rows.length?"("+Math.min(rows.length,30)+" of "+fm(tot.requests||0)+")":"";
  $("rcB").innerHTML=rows.length?rows.slice(0,30).map(r=>"<tr><td>"+new Date(r.t).toLocaleTimeString()+"</td><td><span class='badge "+(r.ok?"ok":"bad")+"'>"+(r.ok?"Done":"Error")+"</span></td><td>"+esc(r.m)+"</td><td>"+fm(r.p)+"</td><td>"+fm(r.c)+"</td><td>"+fm(r.rate)+"</td><td>"+fm(r.ms/1000)+"s</td><td>"+esc(r.fin||"")+"</td></tr>").join(""):'<tr><td colspan="8" class="sub">no requests yet — send one from the Console tab</td></tr>';
  $("totTx").textContent=(tot.requests||0)?("Since instance start: "+fm(tot.requests)+" requests · "+fm(tot.prompt)+" prompt tokens · "+fm(tot.completion)+" written · resets on cold start"):"";
+ const pl=S.pool||{};
+ $("poolTx").textContent="fallback pool: "+(pl.enabled?("ON · "+fm(pl.size||0)+" relays"):"OFF (set PROXY_FALLBACK=1)");
  const mods=Array.isArray(S.models)?S.models:[];
  $("modB").innerHTML=mods.length?mods.map(m=>"<tr><td>"+esc(m.m)+"</td><td>"+fm(m.requests)+"</td><td>"+fm(m.errors)+"</td><td>"+fm(m.prompt)+"</td><td>"+fm(m.completion)+"</td></tr>").join(""):'<tr><td colspan="5" class="sub">no requests yet</td></tr>';
 }
 function renderOff(){
  pill("err","Offline");$("liveBadge").textContent="○ offline — retrying";
  $("stTx").textContent="Stats unreachable";$("stSub").textContent="polling continues while this page is open";
+ $("poolTx").textContent="fallback pool: unknown (stats unreachable)";
 }
 async function poll(){
  if(document.hidden){setTimeout(poll,2000);return} // active only while viewed

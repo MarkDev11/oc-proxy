@@ -112,7 +112,13 @@ module.exports = async function handler(req, res) {
   if (req.method === "GET") {
     const u = String(req.url || "");
     if (u.includes("internal=stats") || u.split("?")[0].endsWith("/api/stats")) {
-      return res.status(200).json(stats.snapshot());
+      let pool = [];
+      try {
+        pool = await proxy.loadPool();
+      } catch {}
+      const snap = stats.snapshot();
+      snap.pool = { enabled: proxy.fallbackEnabled(), size: pool.length };
+      return res.status(200).json(snap);
     }
   }
   if (req.method !== "POST") return res.status(405).json({ error: { message: "method not allowed" } });

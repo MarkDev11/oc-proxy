@@ -105,7 +105,11 @@ limit reached"). A spent relay is cooled down and the next proxy is tried
 immediately; non-streaming turns that die mid-stream get one extra retry wave.
 Normal requests stay direct — no added latency. Pool
 entries older than 1 hour or transparent proxies are discarded; failed
-proxies are cooled down for 30 min.
+proxies are cooled down for 30 min. The pool file is read through jsDelivr,
+which the validator purges on every run so relays stay fresh; entries up to
+6 hours old are still accepted (dead ones get cooled down at runtime, and an
+empty fetch never wipes the last known good list). Pool status
+(`ON · N relays`) is visible on the dashboard and in `GET /api/stats`.
 
 ```bash
 PROXY_FALLBACK=1
