@@ -8,7 +8,7 @@ module.exports = function handler(req, res) {
   return res.status(200).json({
     status: "ok",
     provider: "opencode",
-    upstream: "https://opencode.ai/zen/v1/responses",
-    models: ["oc/muse-spark-1.3-contributor-free", "oc/muse-spark-1.2-contributor-free"],
+    upstream: "https://opencode.ai/inference/v1",
+    models: ["oc/muse-spark-1.3-contributor-free", "oc/muse-spark-1.2-contributor-free", "muse-spark-1.3-contributor-free", "muse-spark-1.2-contributor-free"],
   });
 };

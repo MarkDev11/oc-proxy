@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>oc-proxy — Monitor</title>
+<style>
+:root{--bg:#0b0e13;--card:#131822;--line:#232b38;--txt:#e6e9ee;--mut:#8b93a1;--grn:#34d399;--blu:#60a5fa;--amb:#fbbf24;--red:#f87171}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+a{color:var(--blu)}.wrap{max-width:1080px;margin:0 auto;padding:0 16px 48px}
+header{position:sticky;top:0;background:rgba(11,14,19,.92);backdrop-filter:blur(6px);border-bottom:1px solid var(--line);z-index:5}
+.hd{max-width:1080px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:16px}
+.brand{font-weight:800;font-size:18px;letter-spacing:.3px}
+.tabs{display:flex;gap:6px;background:#10151d;border:1px solid var(--line);border-radius:12px;padding:4px}
+.tabs button{background:transparent;border:0;color:var(--mut);padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px}
+.tabs button.on{background:#1c2534;color:var(--txt)}
+.pill{margin-left:auto;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 12px;color:var(--mut)}
+.pill i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--mut);margin-right:6px}
+.pill.gen{color:var(--grn)}.pill.gen i{background:var(--grn)}
+.pill.err{color:var(--red)}.pill.err i{background:var(--red)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-top:16px}
+.card h3{margin:0 0 4px;font-size:14px}
+.lgnd{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin:6px 0 10px}
+.lgnd b{font-weight:600}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:var(--mut)}
+.st-idle{font-weight:700}.row{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.sub{color:var(--mut);font-size:12px}.bar{height:6px;background:#0d1219;border-radius:99px;margin-top:12px;overflow:hidden}
+.bar>div{height:100%;width:0;background:var(--grn);border-radius:99px;transition:width .3s}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media(max-width:900px){.grid4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:520px){.grid4{grid-template-columns:1fr}}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-top:16px}
+.stat .lb{font-size:12px;color:var(--mut);margin-bottom:8px}
+.big{font-size:30px;font-weight:800;letter-spacing:-.5px}.unit{font-size:13px;color:var(--mut);font-weight:400}
+.two{display:flex;gap:24px}.sm{font-size:12px;color:var(--mut);margin-top:4px}
+.cols{display:grid;grid-template-columns:300px 1fr;gap:16px}
+@media(max-width:900px){.cols{grid-template-columns:1fr}}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{color:var(--mut);text-align:left;font-weight:600;padding:8px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:8px 6px;border-bottom:1px solid #1a212d;white-space:nowrap}
+.tbl{overflow-x:auto;max-height:380px;overflow-y:auto}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:11px;border:1px solid var(--line)}
+.ok{color:var(--grn)}.bad{color:var(--red)}
+.donut{display:flex;align-items:center;gap:16px}
+label{font-size:12px;color:var(--mut);display:block;margin:10px 0 4px}
+input,select,textarea{width:100%;background:#0d1219;border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:9px 11px;font-size:13px}
+textarea{min-height:90px;resize:vertical}
+.btn{background:var(--grn);border:0;color:#06281c;font-weight:700;border-radius:10px;padding:10px 18px;cursor:pointer;margin-top:12px;font-size:14px}
+.btn:disabled{opacity:.5;cursor:wait}
+pre.out{background:#0d1219;border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre-wrap;min-height:120px;margin:12px 0 0;font-size:13px}
+.frm{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+@media(max-width:700px){.frm{grid-template-columns:1fr}}
+.chk{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:13px}.chk input{width:auto}
+code{background:#0d1219;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+ul{padding-left:18px}li{margin:6px 0}
+</style>
+</head>
+<body>
+<header><div class="hd">
+<div class="brand">oc-proxy</div>
+<div class="tabs">
+<button id="t-mon" class="on" onclick="tab('mon')">Monitor</button>
+<button id="t-con" onclick="tab('con')">Console</button>
+<button id="t-about" onclick="tab('about')">About</button>
+</div>
+<div class="pill" id="pill"><i></i><span id="pillTx">Idle</span></div>
+</div></header>
+<div class="wrap">
+
+<!-- MONITOR -->
+<div id="tab-mon">
+<div class="card"><h3>Model state</h3>
+<div class="lgnd"><span><span class="dot" id="dIdle" style="background:var(--grn)"></span><b>Idle</b></span><span><span class="dot" id="dGen"></span>Generating</span><span><span class="dot" id="dErr"></span>Error</span></div>
+<div class="row"><div class="st-idle" id="stTx">Waiting for a request</div><div class="sub" id="stSub">no requests yet</div></div>
+<div class="bar"><div id="stBar"></div></div>
+</div>
+
+<div class="grid4">
+<div class="stat"><div class="lb">Speed</div><div class="two">
+<div><span class="big" id="sDec">–</span> <span class="unit">t/s</span><div class="sm">Decode last request</div></div>
+<div><span class="big" id="sPre">–</span> <span class="unit">t/s</span><div class="sm">Prefill last request</div></div>
+</div></div>
+<div class="stat"><div class="lb">Requests</div>
+<div><span class="big" id="sReq">0</span></div><div class="sm" id="sErr">0 errors</div></div>
+<div class="stat"><div class="lb">Tokens</div><div class="two">
+<div><span class="big" id="sPin">0</span><div class="sm">prompt total</div></div>
+<div><span class="big" id="sCout">0</span><div class="sm">completion total</div></div>
+</div></div>
+<div class="stat"><div class="lb">Latency</div><div class="two">
+<div><span class="big" id="sTtfb">–</span> <span class="unit">s</span><div class="sm">TTFB last request</div></div>
+<div><span class="big" id="sMod">–</span><div class="sm" id="sModLb">models: …</div></div>
+</div></div>
+</div>
+
+<div class="cols">
+<div class="card"><h3>Context fill</h3>
+<div class="donut">
+<svg width="110" height="110" viewBox="0 0 110 110"><circle cx="55" cy="55" r="46" fill="none" stroke="#0d1219" stroke-width="12"/><circle id="dn" cx="55" cy="55" r="46" fill="none" stroke="#34d399" stroke-width="12" stroke-linecap="round" stroke-dasharray="289" stroke-dashoffset="289" transform="rotate(-90 55 55)"/><text id="dnTx" x="55" y="60" text-anchor="middle" fill="#e6e9ee" font-size="20" font-weight="800">–</text></svg>
+<div><div class="sub" id="ctxTx">no requests yet</div><div class="sub" id="ctxMod"></div></div>
+</div></div>
+<div class="card"><h3>Recent requests <span class="sub" id="rcN"></span></h3>
+<div class="tbl"><table><thead><tr><th>TIME</th><th>STATUS</th><th>MODEL</th><th>PROMPT</th><th>OUTPUT</th><th>PREFILL T/S</th><th>DECODE T/S</th><th>FINISH</th></tr></thead><tbody id="rcB"><tr><td colspan="8" class="sub">no requests yet — send one from the Console tab</td></tr></tbody></table></div>
+<div class="sub" id="totTx" style="margin-top:10px"></div>
+</div>
+</div>
+</div>
+
+<!-- CONSOLE -->
+<div id="tab-con" hidden>
+<div class="card"><h3>Try a request</h3><div class="sub">Sent to <code>/v1/chat/completions</code> on this host. History is kept in this browser only.</div>
+<div class="frm"><div>
+<label>Model</label><select id="cMod"><option>loading…</option></select>
+<label>API key (stored in this browser only)</label><input id="cKey" type="password" placeholder="Bearer key (GATEWAY_API_KEY)" autocomplete="off">
+</div><div>
+<label>Stream</label><div class="chk"><input id="cStream" type="checkbox" checked> stream response</div>
+<label>Timeout (s)</label><input id="cTo" type="number" value="90" min="10" max="120">
+</div></div>
+<label>Prompt</label><textarea id="cPrompt">Reply with OK.</textarea>
+<button class="btn" id="cSend" onclick="send()">Send</button>
+<div class="sub" id="cStat" style="margin-top:8px"></div>
+<pre class="out" id="cOut">response appears here…</pre>
+</div>
+</div>
+
+<!-- ABOUT -->
+<div id="tab-about" hidden>
+<div class="card"><h3>About</h3>
+<p class="sub">Thin OpenAI-compatible proxy for the opencode.ai free tier. Zero dependencies, Vercel-ready.</p>
+<ul>
+<li><code>GET /v1/models</code> — free models, fetched live from upstream (5 min cache)</li>
+<li><code>POST /v1/chat/completions</code> — OpenAI shape: <code>messages</code>, <code>tools</code>, <code>tool_choice</code>, <code>stream</code></li>
+<li><code>GET /api/health</code> — deployment check</li>
+</ul>
+<p class="sub">Source: <a href="https://github.com/MarkDev11/oc-proxy">github.com/MarkDev11/oc-proxy</a>. Long requests close gracefully with <code>finish_reason: "length"</code> so agent loops can continue.</p>
+</div>
+</div>
+
+</div>
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const LS="ocproxy_recent_v1";
+let hist=[];try{hist=JSON.parse(localStorage.getItem(LS)||"[]")}catch(e){hist=[]}
+let ctxLen=1048576,models=[];
+const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+const fm=n=>n==null||isNaN(n)?"–":Number(n).toLocaleString("en-US",{maximumFractionDigits:1});
+
+function tab(n){for(const t of["mon","con","about"]){$("tab-"+t).hidden=t!==n;$("t-"+t).className=t===n?"on":""}}
+function pill(mode,tx){const p=$("pill");p.className="pill"+(mode==="gen"?" gen":mode==="err"?" err":"");$("pillTx").textContent=tx;
+$("dGen").style.background=mode==="gen"?"var(--grn)":"";$("dErr").style.background=mode==="err"?"var(--red)":"";$("dIdle").style.background=mode!=="gen"&&mode!=="err"?"var(--grn)":"";}
+
+function render(){
+ const totP=hist.reduce((a,r)=>a+(r.p||0),0),totC=hist.reduce((a,r)=>a+(r.c||0),0);
+ const errs=hist.filter(r=>r.st!=="Done").length;
+ $("sReq").textContent=hist.length;$("sErr").textContent=errs+" error"+(errs===1?"":"s");
+ $("sPin").textContent=fm(totP);$("sCout").textContent=fm(totC);
+ const last=hist[0];
+ if(last){$("sDec").textContent=fm(last.dec);$("sPre").textContent=fm(last.pre);$("sTtfb").textContent=fm(last.ttfb);
+ $("stTx").textContent=last.st==="Done"?"Idle":"Error";$("stSub").textContent="last: "+fm(last.c)+" tokens at "+fm(last.dec)+" tok/s";
+ $("stBar").style.width=last.st==="Done"?"100%":"100%";$("stBar").style.background=last.st==="Done"?"var(--grn)":"var(--red)";
+ const pct=Math.min(100,last.p/ctxLen*100);
+ $("dnTx").textContent=Math.round(pct)+"%";$("ctxTx").textContent=fm(last.p)+" / "+fm(ctxLen)+" tokens";
+ $("ctxMod").textContent=last.m;
+ }else{$("stTx").textContent="Waiting for a request";$("stSub").textContent="no requests yet";}
+ $("sMod").textContent=models.length?models.length:"–";$("sModLb").textContent="models: live";
+ $("rcN").textContent=hist.length?"("+hist.length+")":"";
+ const tb=$("rcB");
+ tb.innerHTML=hist.length?hist.slice(0,30).map(r=>"<tr><td>"+r.t+"</td><td><span class='badge "+(r.st==="Done"?"ok":"bad")+"'>"+r.st+"</span></td><td>"+esc(r.m)+"</td><td>"+fm(r.p)+"</td><td>"+fm(r.c)+"</td><td>"+fm(r.pre)+"</td><td>"+fm(r.dec)+"</td><td>"+esc(r.fin||"")+"</td></tr>").join(""):'<tr><td colspan="8" class="sub">no requests yet — send one from the Console tab</td></tr>';
+ $("totTx").textContent=hist.length?("Since "+hist[hist.length-1].t+": "+hist.length+" requests · "+fm(totP)+" prompt tokens · "+fm(totC)+" written"):"";
+}
+function save(){try{localStorage.setItem(LS,JSON.stringify(hist.slice(0,60)))}catch(e){}}
+
+async function meta(){
+ try{const r=await fetch("/v1/models");const j=await r.json();
+ models=(j.data||[]).map(m=>m.id);const bare=models.filter(i=>!i.startsWith("oc/"));
+ const sel=$("cMod");sel.innerHTML=bare.map(id=>"<option>"+esc(id)+"</option>").join("");
+ const fav=bare.find(i=>i.includes("muse-spark-1.3"))||bare[0];if(fav)sel.value=fav;
+ const f=models.find(i=>i.replace(/^oc\//,"")===String(sel.value).replace(/^oc\//,""));
+ }catch(e){$("cMod").innerHTML="<option>models unreachable</option>"}
+ try{await fetch("/api/health")}catch(e){}
+ render();
+}
+$("cMod")&&$("cMod").addEventListener("change",()=>{});
+async function send(){
+ const model=$("cMod").value,prompt=$("cPrompt").value,key=$("cKey").value.trim();
+ const stream=$("cStream").checked,tmo=Math.max(10,Math.min(120,+($("cTo").value||90)))*1000;
+ if(key)try{localStorage.setItem("ocproxy_key",key)}catch(e){}
+ const btn=$("cSend");btn.disabled=true;pill("gen","Generating");$("stTx").textContent="Generating…";$("cOut").textContent="";
+ const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),tmo);
+ const t0=performance.now();let tFirst=0,text="",usage=null,finish="";
+ try{
+  const r=await fetch("/v1/chat/completions",{method:"POST",signal:ctl.signal,
+   headers:Object.assign({"Content-Type":"application/json"},key?{Authorization:"Bearer "+key}:{}),
+   body:JSON.stringify({model,messages:[{role:"user",content:prompt}],stream})});
+  if(!r.ok){const t=await r.text();throw new Error("HTTP "+r.status+" "+t.slice(0,200))}
+  if(stream){
+   const rd=r.body.getReader(),dec=new TextDecoder();let buf="";
+   for(;;){const{done,value}=await rd.read();if(done)break;
+    if(!tFirst&&value&&value.length)tFirst=performance.now();
+    buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf("\n\n"))>=0){const f=buf.slice(0,i);buf=buf.slice(i+2);
+     for(const ln of f.split("\n")){if(!ln.startsWith("data:"))continue;const d=ln.slice(5).trim();
+      if(d==="[DONE]")continue;try{const j=JSON.parse(d);
+       const ch=j.choices&&j.choices[0];
+       if(ch&&ch.delta&&typeof ch.delta.content==="string")text+=ch.delta.content;
+       if(ch&&ch.finish_reason)finish=ch.finish_reason;
+       if(j.usage)usage=j.usage;
+      }catch(e){}}}}
+   $("cOut").textContent=text||"(empty)";
+  }else{
+   const j=await r.json();tFirst=tFirst||performance.now();
+   const m=j.choices&&j.choices[0]&&j.choices[0].message||{};
+   text=m.content||"";finish=(j.choices&&j.choices[0]&&j.choices[0].finish_reason)||"";usage=j.usage||null;
+   $("cOut").textContent=text||JSON.stringify(j).slice(0,2000);
+  }
+  const tEnd=performance.now();
+  const p=usage?(usage.prompt_tokens||0):Math.round(prompt.length/4);
+  const c=usage?(usage.completion_tokens||0):Math.round(text.length/4);
+  const ttfb=(tFirst||tEnd)-t0,dec2=Math.max(1,(tEnd-(tFirst||t0)));
+  const rec={t:new Date().toLocaleTimeString(),st:"Done",m:model,p:p,c:c,pre:p/(ttfb/1000),dec:c/(dec2/1000),ttfb:ttfb/1000,fin:finish||"stop"};
+  hist.unshift(rec);save();render();pill("","Idle");
+  $("cStat").textContent="last: "+fm(c)+" tokens at "+fm(rec.dec)+" tok/s · TTFB "+fm(rec.ttfb)+"s";
+ }catch(e){
+  clearTimeout(to);btn.disabled=false;
+  const msg=e.name==="AbortError"?"timeout after "+Math.round(tmo/1000)+"s":e.message;
+  $("cOut").textContent="error: "+msg;pill("err","Error");
+  hist.unshift({t:new Date().toLocaleTimeString(),st:"Error",m:model,p:0,c:0,pre:0,dec:0,ttfb:0,fin:"error"});
+  save();render();btn.disabled=false;return;
+ }
+ clearTimeout(to);btn.disabled=false;
+}
+(function init(){try{const k=localStorage.getItem("ocproxy_key");if(k)$("cKey").value=k}catch(e){}render();meta();})();
+</script>
+</body>
+</html>
