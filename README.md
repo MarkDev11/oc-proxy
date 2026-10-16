@@ -97,8 +97,13 @@ raise both `maxDuration` and the deadline.
 
 When `PROXY_FALLBACK=1` and `PROXY_POOL_URL` point to a fresh pool (maintained
 by GitHub Actions on the `pool` branch, every 15 min), the proxy retries
-once via a healthy HTTP proxy **only** on retryable upstream failures
-(`429`/`502`/`503`). Normal requests stay direct — no added latency. Pool
+via a healthy HTTP proxy **only** on retryable upstream failures. The
+skip-to-next-relay decision uses status (`429`/`500`/`502`/`503`) **and**
+message patterns: rate limit / quota / FreeUsageLimit errors, region blocks,
+overload / capacity errors, and usage / token-limit errors (e.g. "Output token
+limit reached"). A spent relay is cooled down and the next proxy is tried
+immediately; non-streaming turns that die mid-stream get one extra retry wave.
+Normal requests stay direct — no added latency. Pool
 entries older than 1 hour or transparent proxies are discarded; failed
 proxies are cooled down for 30 min.
 

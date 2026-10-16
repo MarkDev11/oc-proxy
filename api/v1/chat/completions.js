@@ -46,19 +46,22 @@ function readJson(req) {
   });
 }
 
-const RETRYABLE = new Set([429, 502, 503]);
-
 async function fetchWithFallback(url, { headers, body }) {
-  let direct = null;
+  // Direct attempt first. Any non-OK upstream reply is drained to text so the
+  // skip-to-next-relay decision can use status AND message (rate limit, region
+  // block, overload, usage/token limits) — not just 429/502/503.
   let directErr = null;
   try {
-    direct = await fetch(url, { method: "POST", headers, body });
-    if (direct.ok || !proxy.fallbackEnabled() || !RETRYABLE.has(direct.status)) return direct;
+    const direct = await fetch(url, { method: "POST", headers, body });
+    if (direct.ok) return direct;
+    let text = "";
     try {
-      directErr = { status: direct.status, text: await direct.text() };
-    } catch {
-      directErr = { status: direct.status, text: "" };
+      text = await direct.text();
+    } catch {}
+    if (!proxy.fallbackEnabled() || !proxy.isRetryable(direct.status, text)) {
+      return { ok: false, status: direct.status, body: null, text: async () => text, headers: {} };
     }
+    directErr = { status: direct.status, text };
   } catch (e) {
     if (!proxy.fallbackEnabled()) throw e;
   }
@@ -68,12 +71,16 @@ async function fetchWithFallback(url, { headers, body }) {
     if (!p) break;
     try {
       const r = await proxy.postViaProxy(p.url, url, { headers, body, timeout: proxy.timeoutMs() });
-      if (r.ok || !RETRYABLE.has(r.status)) {
-        return { ok: r.ok, status: r.status, body: r.stream, text: r.text, headers: r.headers || {} };
+      if (r.ok) {
+        return { ok: true, status: r.status, body: r.stream, text: r.text, headers: r.headers || {} };
       }
+      let text = "";
       try {
-        await r.text().catch(() => {});
+        text = await r.text();
       } catch {}
+      if (!proxy.isRetryable(r.status, text)) {
+        return { ok: false, status: r.status, body: null, text: async () => text, headers: r.headers || {} };
+      }
       proxy.coolDown(p.url);
     } catch {
       proxy.coolDown(p.url);
@@ -158,8 +165,8 @@ module.exports = async function handler(req, res) {
     return res.status(err.status).json(err.body);
   }
 
-  const tr = makeTranslator(displayModel, renameMap);
-  const reader = upstream.body.getReader();
+  let tr = makeTranslator(displayModel, renameMap);
+  let reader = upstream.body.getReader();
   const decoder = new TextDecoder();
 
   // Soft deadline: close gracefully with finish_reason "length" BEFORE the
@@ -184,57 +191,88 @@ module.exports = async function handler(req, res) {
   };
 
   if (!clientWantsStream) {
-    try {
-      let buf = "";
-      for (;;) {
-        if (expired()) {
-          cutOff();
-          break;
-        }
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
-        buf += decoder.decode(value, { stream: true });
-        const { frames, rest } = splitFrames(buf);
-        buf = rest;
-        for (const f of frames) {
-          const p = parseFrame(f);
-          if (!p) continue;
-          if (p.event === "done") continue;
-          tr.apply(p.event, p.data);
-        }
+    // Up to 2 waves: if the first upstream reply dies mid-stream with a
+    // skip-to-next-relay error (rate limit, region block, overload, usage /
+    // token limits), the whole turn is retried once through the proxy pool.
+    let attemptUpstream = upstream;
+    for (let wave = 0; wave < 2; wave++) {
+      if (wave > 0) {
+        tr = makeTranslator(displayModel, renameMap);
+        reader = attemptUpstream.body.getReader();
+        firstBytesAt = 0;
       }
-      const tail = decoder.decode();
-      if (tail) {
-        const { frames } = splitFrames(tail);
-        for (const f of frames) {
-          const p = parseFrame(f);
-          if (!p || p.event === "done") continue;
-          tr.apply(p.event, p.data);
+      try {
+        let buf = "";
+        for (;;) {
+          if (expired()) {
+            cutOff();
+            break;
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
+          buf += decoder.decode(value, { stream: true });
+          const { frames, rest } = splitFrames(buf);
+          buf = rest;
+          for (const f of frames) {
+            const p = parseFrame(f);
+            if (!p) continue;
+            if (p.event === "done") continue;
+            tr.apply(p.event, p.data);
+          }
         }
+        const tail = decoder.decode();
+        if (tail) {
+          const { frames } = splitFrames(tail);
+          for (const f of frames) {
+            const p = parseFrame(f);
+            if (!p || p.event === "done") continue;
+            tr.apply(p.event, p.data);
+          }
+        }
+        const out = tr.finalJson();
+        stats.record({
+          m: displayModel,
+          ok: true,
+          st: 200,
+          p: out.usage.prompt_tokens || stats.est(upBody),
+          c: out.usage.completion_tokens || stats.est(tr.state.text),
+          ms: Date.now() - t0,
+          fin: out.choices[0].finish_reason,
+        });
+        return res.status(200).json(out);
+      } catch (e) {
+        try {
+          reader.cancel();
+        } catch {}
+        if (wave === 0 && proxy.fallbackEnabled() && proxy.isRetryable(502, e.message)) {
+          let up2 = null;
+          try {
+            up2 = await fetchWithFallback(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
+          } catch {
+            up2 = null;
+          }
+          if (up2 && up2.ok && up2.body) {
+            attemptUpstream = up2;
+            continue;
+          }
+          if (up2 && !up2.ok) {
+            const err = await forwardUpstreamError(up2);
+            stats.record({ m: displayModel, ok: false, st: err.status, ms: Date.now() - t0, fin: "error" });
+            return res.status(err.status).json(err.body);
+          }
+        }
+        stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
+        if (!res.headersSent) return res.status(502).json({ error: { message: e.message } });
+        try {
+          res.end();
+        } catch {}
+        return;
+      } finally {
+        try {
+          reader.cancel();
+        } catch {}
       }
-      const out = tr.finalJson();
-      stats.record({
-        m: displayModel,
-        ok: true,
-        st: 200,
-        p: out.usage.prompt_tokens || stats.est(upBody),
-        c: out.usage.completion_tokens || stats.est(tr.state.text),
-        ms: Date.now() - t0,
-        fin: out.choices[0].finish_reason,
-      });
-      return res.status(200).json(out);
-    } catch (e) {
-      stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
-      if (!res.headersSent) return res.status(502).json({ error: { message: e.message } });
-      try {
-        res.end();
-      } catch {}
-      return;
-    } finally {
-      try {
-        reader.cancel();
-      } catch {}
     }
   }
 
