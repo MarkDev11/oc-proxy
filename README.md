@@ -53,11 +53,11 @@ cut off. For long runs, consider an HF Space / VPS instead.
 * `POST /v1/chat/completions` — OpenAI shape (`messages`, `tools`,
   `tool_choice`, `stream`). Any `*-free` model is accepted (400 otherwise).
 * `GET /api/health` — deployment check.
-* `GET /` — live Strata-style monitor dashboard (model state, speed, context fill,
-  recent requests, conversation cache; no hardware cards). Real-time polling
-  runs only while the page is open; nothing is stored. Source engine override:
-  `STRATA_URL`.
-* `GET /api/strata` — trimmed live engine snapshot (JSON, no hardware fields).
+* `GET /` — live monitor dashboard for this proxy (model state, speed, context
+  fill, recent requests, per-model totals; no hardware cards). Real-time polling
+  runs only while the page is open; stats are in-memory per instance and reset
+  on cold start — nothing is stored.
+* `GET /api/stats` — trimmed request stats snapshot (JSON) behind the dashboard.
 
 Examples:
 

@@ -16,6 +16,7 @@ const {
   makeTranslator,
 } = require("../../../lib/opencode");
 const proxy = require("../../../lib/proxy");
+const stats = require("../../../lib/stats");
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -119,6 +120,7 @@ module.exports = async function handler(req, res) {
 
   const clientWantsStream = chatBody.stream === true;
   const displayModel = String(chatBody.model);
+  const t0 = Date.now();
   let upBody;
   let renameMap;
   try {
@@ -138,10 +140,12 @@ module.exports = async function handler(req, res) {
   try {
     upstream = await fetchWithFallback(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
   } catch (e) {
+    stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
     return res.status(502).json({ error: { message: `upstream unreachable: ${e.message}` } });
   }
   if (!upstream.ok || !upstream.body) {
     const err = await forwardUpstreamError(upstream);
+    stats.record({ m: displayModel, ok: false, st: err.status, ms: Date.now() - t0, fin: "error" });
     return res.status(err.status).json(err.body);
   }
 
@@ -200,8 +204,19 @@ module.exports = async function handler(req, res) {
           tr.apply(p.event, p.data);
         }
       }
-      return res.status(200).json(tr.finalJson());
+      const out = tr.finalJson();
+      stats.record({
+        m: displayModel,
+        ok: true,
+        st: 200,
+        p: out.usage.prompt_tokens || stats.est(upBody),
+        c: out.usage.completion_tokens || stats.est(tr.state.text),
+        ms: Date.now() - t0,
+        fin: out.choices[0].finish_reason,
+      });
+      return res.status(200).json(out);
     } catch (e) {
+      stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
       if (!res.headersSent) return res.status(502).json({ error: { message: e.message } });
       try {
         res.end();
@@ -244,7 +259,20 @@ module.exports = async function handler(req, res) {
     res.write(enc.encode(tr.finalChunk()));
     res.write(enc.encode("data: [DONE]\n\n"));
     res.end();
+    {
+      const u = tr.state.usage || {};
+      stats.record({
+        m: displayModel,
+        ok: true,
+        st: 200,
+        p: u.prompt_tokens || stats.est(upBody),
+        c: u.completion_tokens || stats.est(tr.state.text),
+        ms: Date.now() - t0,
+        fin: tr.finish(),
+      });
+    }
   } catch (e) {
+    stats.record({ m: displayModel, ok: false, st: 200, ms: Date.now() - t0, fin: "error" });
     try {
       res.write(enc.encode(`data: ${JSON.stringify({ error: { message: e.message } })}\n\n`));
       res.end();
