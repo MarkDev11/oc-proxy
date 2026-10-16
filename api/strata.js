@@ -29,6 +29,7 @@ function trimReq(r) {
     pre: Math.round(pre * 10) / 10,
     dec: num(r.decode_tok_s),
     dur: num(r.duration_s),
+    hit: Math.round(num(r.hit_rate) * 1000) / 10,
   };
 }
 

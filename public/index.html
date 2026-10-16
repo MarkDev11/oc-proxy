@@ -98,7 +98,7 @@ ul{padding-left:18px}li{margin:6px 0}
 <div><div class="sub" id="ctxTx">no requests yet</div><div class="sub" id="ctxMod"></div></div>
 </div></div>
 <div class="card"><h3>Recent requests <span class="sub" id="rcN"></span></h3>
-<div class="tbl"><table><thead><tr><th>TIME</th><th>STATUS</th><th>PROMPT</th><th>REUSED</th><th>OUTPUT</th><th>PREFILL T/S</th><th>DECODE T/S</th><th>FINISH</th></tr></thead><tbody id="rcB"><tr><td colspan="8" class="sub">connecting to engine…</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>TIME</th><th>STATUS</th><th>PROMPT</th><th>REUSED</th><th>OUTPUT</th><th>PREFILL T/S</th><th>DECODE T/S</th><th>HIT RATE</th><th>FINISH</th></tr></thead><tbody id="rcB"><tr><td colspan="9" class="sub">connecting to engine…</td></tr></tbody></table></div>
 <div class="sub" id="totTx" style="margin-top:10px"></div>
 </div>
 </div>
@@ -165,7 +165,7 @@ function renderLive(L){
  if(last){$("sDec").textContent=fm(last.dec);$("sPre").textContent=fm(last.pre);
   $("sTtfb").textContent=fm(last.dur);
   $("dnTx").textContent=Math.round(Math.min(100,last.p/(eng.ctx||262144)*100))+"%";
-  $("ctxTx").textContent=fm(last.p)+" / "+fm(eng.ctx||262144)+" tokens";$("ctxMod").textContent=eng.model||"";
+  $("ctxTx").textContent=(last.p/1024).toFixed(1)+"k / "+Math.round((eng.ctx||262144)/1024)+"K";$("ctxMod").textContent=eng.model||"";
  }
  $("sReq").textContent=fm(tot.requests);
  const pct=tot.prompt?Math.round(tot.reused/tot.prompt*100):0;
@@ -173,7 +173,7 @@ function renderLive(L){
  $("sPin").textContent=fm(tot.prompt);$("sCout").textContent=fm(tot.out);
  $("sMod").textContent=q;$("sModLb").textContent="queued";
  $("rcN").textContent=rows.length?"("+Math.min(rows.length,30)+" of "+fm(tot.requests)+")":"";
- $("rcB").innerHTML=rows.length?rows.slice(0,30).map(r=>"<tr><td>"+new Date(r.t).toLocaleTimeString()+"</td><td><span class='badge "+(r.fin==="stop"?"ok":"bad")+"'>"+(r.fin==="stop"?"Done":esc(r.fin||"?"))+"</span></td><td>"+fm(r.p)+"</td><td>"+fm(r.re)+"</td><td>"+fm(r.c)+"</td><td>"+fm(r.pre)+"</td><td>"+fm(r.dec)+"</td><td>"+esc(r.fin||"")+"</td></tr>").join(""):'<tr><td colspan="8" class="sub">engine idle — no requests yet</td></tr>';
+ $("rcB").innerHTML=rows.length?rows.slice(0,30).map(r=>"<tr><td>"+new Date(r.t).toLocaleTimeString()+"</td><td><span class='badge "+(r.fin==="stop"?"ok":"bad")+"'>"+(r.fin==="stop"?"Done":esc(r.fin||"?"))+"</span></td><td>"+fm(r.p)+"</td><td>"+fm(r.re)+"</td><td>"+fm(r.c)+"</td><td>"+fm(r.pre)+"</td><td>"+fm(r.dec)+"</td><td>"+fm(r.hit)+"%</td><td>"+esc(r.fin||"")+"</td></tr>").join(""):'<tr><td colspan="9" class="sub">engine idle — no requests yet</td></tr>';
  $("totTx").textContent=tot.since?("Since "+new Date(tot.since).toLocaleString()+": "+fm(tot.requests)+" requests · "+fm(tot.prompt)+" prompt tokens ("+fm(tot.reused)+" reused) · "+fm(tot.out)+" written"):"";
  $("ccLast").textContent="Last request — "+fm(cc.lastRe)+" of "+fm(cc.lastP)+" prompt tokens reused";
  $("ccTot").textContent=fm(cc.reqRe)+" of "+fm(cc.req)+" requests reused part of their prompt · "+fm(cc.re)+" tokens total";
