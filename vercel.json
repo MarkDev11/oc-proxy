@@ -7,6 +7,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/stats",
+      "destination": "/api/v1/chat/completions?internal=stats"
+    },
+    {
       "source": "/v1/:path*",
       "destination": "/api/v1/:path*"
     }

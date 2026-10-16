@@ -99,6 +99,15 @@ async function forwardUpstreamError(upstream) {
 module.exports = async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
+  // Stats share this function's process memory (Vercel isolates each /api file,
+  // so /api/stats is rewritten here — otherwise in-memory stats could never meet
+  // the chat turns they describe). Realtime only, nothing stored.
+  if (req.method === "GET") {
+    const u = String(req.url || "");
+    if (u.includes("internal=stats") || u.split("?")[0].endsWith("/api/stats")) {
+      return res.status(200).json(stats.snapshot());
+    }
+  }
   if (req.method !== "POST") return res.status(405).json({ error: { message: "method not allowed" } });
   if (!checkAuth(req)) return res.status(401).json({ error: { message: "invalid api key" } });
 
