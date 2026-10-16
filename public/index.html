@@ -160,7 +160,7 @@ function renderLive(L){
  pill(busy?"gen":"",cap(L.live&&L.live.state)+(q?" · Q"+q:""));
  $("liveBadge").textContent=L.stale?"● stale · retrying":"● live";
  $("stTx").textContent=cap(L.live&&L.live.state)+(q?" ("+q+" queued)":"");
- $("stSub").textContent=(eng.model||"engine")+(last?(" · last: "+fm(last.c)+" tokens at "+fm(last.dec)+" tok/s"):"");
+ $("stSub").textContent="engine "+(eng.model||"strata")+(last?(" · last: "+fm(last.c)+" tokens at "+fm(last.dec)+" tok/s"):"");
  $("stBar").style.width=last?Math.min(100,last.p/(eng.ctx||262144)*100)+"%":"0";
  if(last){$("sDec").textContent=fm(last.dec);$("sPre").textContent=fm(last.pre);
   $("sTtfb").textContent=fm(last.dur);
