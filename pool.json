@@ -1,36 +1,30 @@
 {
-  "updatedAt": "2026-10-25T17:18:38.311Z",
-  "cursor": 1211,
+  "updatedAt": "2026-10-25T19:48:44.453Z",
+  "cursor": 1271,
   "proxies": [
     {
-      "url": "http://198.199.86.11:3128",
-      "latencyMs": 177,
+      "url": "http://159.203.61.169:3128",
+      "latencyMs": 145,
       "anon": "anonymous",
-      "checkedAt": "2026-10-25T17:18:38.311Z"
+      "checkedAt": "2026-10-25T19:48:44.453Z"
     },
     {
       "url": "http://209.97.150.167:3128",
-      "latencyMs": 182,
+      "latencyMs": 153,
       "anon": "anonymous",
-      "checkedAt": "2026-10-25T17:18:38.311Z"
+      "checkedAt": "2026-10-25T19:48:44.453Z"
+    },
+    {
+      "url": "http://198.199.86.11:3128",
+      "latencyMs": 160,
+      "anon": "anonymous",
+      "checkedAt": "2026-10-25T19:48:44.453Z"
     },
     {
       "url": "http://138.68.60.8:8080",
-      "latencyMs": 216,
+      "latencyMs": 248,
       "anon": "anonymous",
-      "checkedAt": "2026-10-25T17:18:38.311Z"
-    },
-    {
-      "url": "http://34.43.46.91:443",
-      "latencyMs": 228,
-      "anon": "anonymous",
-      "checkedAt": "2026-10-25T17:18:38.311Z"
-    },
-    {
-      "url": "http://159.203.61.169:3128",
-      "latencyMs": 272,
-      "anon": "anonymous",
-      "checkedAt": "2026-10-25T17:18:38.311Z"
+      "checkedAt": "2026-10-25T19:48:44.453Z"
     }
   ]
 }
