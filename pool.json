@@ -1,18 +1,18 @@
 {
-  "updatedAt": "2026-11-03T21:59:00.639Z",
-  "cursor": 3851,
+  "updatedAt": "2026-11-04T01:53:08.637Z",
+  "cursor": 3911,
   "proxies": [
     {
       "url": "http://159.203.61.169:3128",
-      "latencyMs": 186,
+      "latencyMs": 120,
       "anon": "anonymous",
-      "checkedAt": "2026-11-03T21:59:00.638Z"
+      "checkedAt": "2026-11-04T01:53:08.637Z"
     },
     {
       "url": "http://134.209.29.120:80",
-      "latencyMs": 594,
+      "latencyMs": 482,
       "anon": "anonymous",
-      "checkedAt": "2026-11-03T21:59:00.639Z"
+      "checkedAt": "2026-11-04T01:53:08.637Z"
     }
   ]
 }
