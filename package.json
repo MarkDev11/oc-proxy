@@ -1,13 +1,18 @@
 {
   "name": "oc-proxy",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "private": true,
-  "description": "Thin OpenAI-compatible proxy for opencode.ai zen free tier (muse-spark), Vercel-ready. Logic ported from 9Router PR #4165.",
+  "description": "Thin OpenAI-compatible proxy for opencode.ai free tier. Runs locally and is exposed through a Cloudflare Quick Tunnel. Zero dependencies.",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.12.0"
   },
   "scripts": {
-    "dev": "vercel dev",
-    "check": "node --check lib/opencode.js && node --check lib/stats.js && node --check lib/proxy.js && node --check api/v1/models.js && node --check \"api/v1/chat/completions.js\" && node --check api/health.js && node --check scripts/validate-pool.js && echo OK"
+    "start": "node scripts/up.js",
+    "server": "bun serve-local.js",
+    "install:tunnel": "bash scripts/install-cloudflared.sh",
+    "bg": "bash scripts/start.sh",
+    "stop": "bash scripts/stop.sh",
+    "status": "bash scripts/status.sh",
+    "check": "node --check serve-local.js && node --check lib/opencode.js && node --check lib/stats.js && node --check api/v1/models.js && node --check api/v1/chat/completions.js && node --check api/v1/messages.js && node --check api/health.js && node --check scripts/up.js && echo OK"
   }
 }

@@ -1,7 +1,8 @@
 node_modules/
-.vercel/
 .env
 .env.local
 .env.*.local
 
-.vercel
+bin/
+run/
+logs/

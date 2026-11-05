@@ -15,7 +15,6 @@ const {
   parseFrame,
   makeTranslator,
 } = require("../../../lib/opencode");
-const proxy = require("../../../lib/proxy");
 const stats = require("../../../lib/stats");
 
 function readJson(req) {
@@ -46,50 +45,43 @@ function readJson(req) {
   });
 }
 
-async function fetchWithFallback(url, { headers, body }) {
-  // Direct attempt first. Any non-OK upstream reply is drained to text so the
-  // skip-to-next-relay decision can use status AND message (rate limit, region
-  // block, overload, usage/token limits) — not just 429/502/503.
-  let directErr = null;
-  try {
-    const direct = await fetch(url, { method: "POST", headers, body });
-    if (direct.ok) return direct;
-    let text = "";
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchUpstream(url, { headers, body }) {
+  const maxWait = Math.max(5000, parseInt(process.env.UPSTREAM_MAX_WAIT_MS || "120000", 10) || 120000);
+  const baseDelay = Math.max(500, parseInt(process.env.UPSTREAM_RETRY_DELAY_MS || "2000", 10) || 2000);
+  const started = Date.now();
+  let attempt = 0;
+  let lastError = null;
+  for (;;) {
+    attempt++;
     try {
-      text = await direct.text();
-    } catch {}
-    if (!proxy.fallbackEnabled() || !proxy.isRetryable(direct.status, text)) {
-      return { ok: false, status: direct.status, body: null, text: async () => text, headers: {} };
-    }
-    directErr = { status: direct.status, text };
-  } catch (e) {
-    if (!proxy.fallbackEnabled()) throw e;
-  }
-  const pool = await proxy.loadPool();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const p = proxy.pickProxy(pool);
-    if (!p) break;
-    try {
-      const r = await proxy.postViaProxy(p.url, url, { headers, body, timeout: proxy.timeoutMs() });
-      if (r.ok) {
-        return { ok: true, status: r.status, body: r.stream, text: r.text, headers: r.headers || {} };
-      }
-      let text = "";
+      const r = await fetch(url, { method: "POST", headers, body });
+      if (!RETRYABLE_STATUS.has(r.status)) return r;
+      const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10) || 0;
+      const backoff = Math.min(30000, baseDelay * 2 ** (attempt - 1));
+      // The free tier reports a generic "until midnight" retry-after even for
+      // short bursts, so cap how long we honor it instead of failing instantly.
+      const delay = Math.min(30000, Math.max(retryAfter * 1000, backoff));
+      if (Date.now() - started + delay > maxWait) return r;
       try {
-        text = await r.text();
+        await r.body?.cancel();
       } catch {}
-      if (!proxy.isRetryable(r.status, text)) {
-        return { ok: false, status: r.status, body: null, text: async () => text, headers: r.headers || {} };
-      }
-      proxy.coolDown(p.url);
-    } catch {
-      proxy.coolDown(p.url);
+      console.warn(`[oc-proxy] upstream ${r.status} (retry-after ${retryAfter}s); retry ${attempt} in ${delay}ms`);
+      await sleep(delay);
+    } catch (e) {
+      lastError = e;
+      const delay = Math.min(30000, baseDelay * 2 ** (attempt - 1));
+      if (Date.now() - started + delay > maxWait) throw e;
+      console.warn(`[oc-proxy] upstream error (${e.message}); retry ${attempt} in ${delay}ms`);
+      await sleep(delay);
     }
   }
-  if (directErr) {
-    return { ok: false, status: directErr.status, body: null, text: async () => directErr.text, headers: {} };
-  }
-  throw new Error("upstream unreachable and proxy fallback exhausted");
+  throw lastError;
 }
 
 async function forwardUpstreamError(upstream) {
@@ -106,21 +98,6 @@ async function forwardUpstreamError(upstream) {
 module.exports = async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
-  // Stats share this function's process memory (Vercel isolates each /api file,
-  // so /api/stats is rewritten here — otherwise in-memory stats could never meet
-  // the chat turns they describe). Realtime only, nothing stored.
-  if (req.method === "GET") {
-    const u = String(req.url || "");
-    if (u.includes("internal=stats") || u.split("?")[0].endsWith("/api/stats")) {
-      let pool = [];
-      try {
-        pool = await proxy.loadPool();
-      } catch {}
-      const snap = stats.snapshot();
-      snap.pool = { enabled: proxy.fallbackEnabled(), size: pool.length };
-      return res.status(200).json(snap);
-    }
-  }
   if (req.method !== "POST") return res.status(405).json({ error: { message: "method not allowed" } });
   if (!checkAuth(req)) return res.status(401).json({ error: { message: "invalid api key" } });
 
@@ -135,7 +112,7 @@ module.exports = async function handler(req, res) {
   if (!chatBody.model || !isAllowedModel(chatBody.model)) {
     return res.status(400).json({
       error: {
-        message: `unsupported model '${chatBody.model}'. Use any *-free opencode model (e.g. oc/muse-spark-1.3-contributor-free, deepseek-v4.1-flash-free).`,
+        message: `unsupported model '${chatBody.model}'. Use any *-free opencode model (e.g. deepseek-v4.1-flash-free).`,
       },
     });
   }
@@ -160,7 +137,7 @@ module.exports = async function handler(req, res) {
 
   let upstream;
   try {
-    upstream = await fetchWithFallback(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
+    upstream = await fetchUpstream(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
   } catch (e) {
     stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
     return res.status(502).json({ error: { message: `upstream unreachable: ${e.message}` } });
@@ -175,19 +152,18 @@ module.exports = async function handler(req, res) {
   let reader = upstream.body.getReader();
   const decoder = new TextDecoder();
 
-  // Soft deadline: close gracefully with finish_reason "length" BEFORE the
-  // platform kills the function mid-token, so agent loops auto-continue.
-  // The per-content deadline runs from the FIRST upstream bytes (slow TTFB
-  // must not eat the whole budget); the absolute cap is the final failsafe.
-  // Both must stay below the function maxDuration (vercel.json).
+  // Optional graceful cutoffs. Disabled by default (0) now that the proxy runs
+  // locally instead of in a serverless function: set SOFT_DEADLINE_MS to close
+  // with finish_reason "length" after N ms of streamed output, and
+  // ABSOLUTE_DEADLINE_MS as a hard cap from the request start.
   const startedAt = Date.now();
-  const softMs = Math.max(1000, parseInt(process.env.SOFT_DEADLINE_MS || "50000", 10) || 50000);
-  const absMs = Math.max(softMs, parseInt(process.env.ABSOLUTE_DEADLINE_MS || "55000", 10) || 55000);
+  const softMs = Math.max(0, parseInt(process.env.SOFT_DEADLINE_MS || "0", 10) || 0);
+  const absMs = Math.max(0, parseInt(process.env.ABSOLUTE_DEADLINE_MS || "0", 10) || 0);
   let firstBytesAt = 0;
   const expired = () => {
     const t = Date.now();
-    if (t - startedAt > absMs) return true;
-    return firstBytesAt > 0 && t - firstBytesAt > softMs;
+    if (absMs > 0 && t - startedAt > absMs) return true;
+    return softMs > 0 && firstBytesAt > 0 && t - firstBytesAt > softMs;
   };
   const cutOff = () => {
     tr.markCutoff();
@@ -197,88 +173,57 @@ module.exports = async function handler(req, res) {
   };
 
   if (!clientWantsStream) {
-    // Up to 2 waves: if the first upstream reply dies mid-stream with a
-    // skip-to-next-relay error (rate limit, region block, overload, usage /
-    // token limits), the whole turn is retried once through the proxy pool.
-    let attemptUpstream = upstream;
-    for (let wave = 0; wave < 2; wave++) {
-      if (wave > 0) {
-        tr = makeTranslator(displayModel, renameMap);
-        reader = attemptUpstream.body.getReader();
-        firstBytesAt = 0;
+    try {
+      let buf = "";
+      for (;;) {
+        if (expired()) {
+          cutOff();
+          break;
+        }
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
+        buf += decoder.decode(value, { stream: true });
+        const { frames, rest } = splitFrames(buf);
+        buf = rest;
+        for (const f of frames) {
+          const p = parseFrame(f);
+          if (!p) continue;
+          if (p.event === "done") continue;
+          tr.apply(p.event, p.data);
+        }
       }
+      const tail = decoder.decode();
+      if (tail) {
+        const { frames } = splitFrames(tail);
+        for (const f of frames) {
+          const p = parseFrame(f);
+          if (!p || p.event === "done") continue;
+          tr.apply(p.event, p.data);
+        }
+      }
+      const out = tr.finalJson();
+      stats.record({
+        m: displayModel,
+        ok: true,
+        st: 200,
+        p: out.usage.prompt_tokens || stats.est(upBody),
+        c: out.usage.completion_tokens || stats.est(tr.state.text),
+        ms: Date.now() - t0,
+        fin: out.choices[0].finish_reason,
+      });
+      return res.status(200).json(out);
+    } catch (e) {
+      stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
+      if (!res.headersSent) return res.status(502).json({ error: { message: e.message } });
       try {
-        let buf = "";
-        for (;;) {
-          if (expired()) {
-            cutOff();
-            break;
-          }
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
-          buf += decoder.decode(value, { stream: true });
-          const { frames, rest } = splitFrames(buf);
-          buf = rest;
-          for (const f of frames) {
-            const p = parseFrame(f);
-            if (!p) continue;
-            if (p.event === "done") continue;
-            tr.apply(p.event, p.data);
-          }
-        }
-        const tail = decoder.decode();
-        if (tail) {
-          const { frames } = splitFrames(tail);
-          for (const f of frames) {
-            const p = parseFrame(f);
-            if (!p || p.event === "done") continue;
-            tr.apply(p.event, p.data);
-          }
-        }
-        const out = tr.finalJson();
-        stats.record({
-          m: displayModel,
-          ok: true,
-          st: 200,
-          p: out.usage.prompt_tokens || stats.est(upBody),
-          c: out.usage.completion_tokens || stats.est(tr.state.text),
-          ms: Date.now() - t0,
-          fin: out.choices[0].finish_reason,
-        });
-        return res.status(200).json(out);
-      } catch (e) {
-        try {
-          reader.cancel();
-        } catch {}
-        if (wave === 0 && proxy.fallbackEnabled() && proxy.isRetryable(502, e.message)) {
-          let up2 = null;
-          try {
-            up2 = await fetchWithFallback(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
-          } catch {
-            up2 = null;
-          }
-          if (up2 && up2.ok && up2.body) {
-            attemptUpstream = up2;
-            continue;
-          }
-          if (up2 && !up2.ok) {
-            const err = await forwardUpstreamError(up2);
-            stats.record({ m: displayModel, ok: false, st: err.status, ms: Date.now() - t0, fin: "error" });
-            return res.status(err.status).json(err.body);
-          }
-        }
-        stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
-        if (!res.headersSent) return res.status(502).json({ error: { message: e.message } });
-        try {
-          res.end();
-        } catch {}
-        return;
-      } finally {
-        try {
-          reader.cancel();
-        } catch {}
-      }
+        res.end();
+      } catch {}
+      return;
+    } finally {
+      try {
+        reader.cancel();
+      } catch {}
     }
   }
 

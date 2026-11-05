@@ -1,13 +1,22 @@
 "use strict";
 
-const { cors } = require("../../lib/opencode");
+const { cors, checkAuth } = require("../../lib/opencode");
 
-const FALLBACK = [
-  { id: "oc/muse-spark-1.3-contributor-free", object: "model", owned_by: "opencode", context_length: 1048576, max_completion_tokens: 131072 },
-  { id: "oc/muse-spark-1.2-contributor-free", object: "model", owned_by: "opencode", context_length: 1048576, max_completion_tokens: 131072 },
-  { id: "muse-spark-1.3-contributor-free", object: "model", owned_by: "opencode", context_length: 1048576, max_completion_tokens: 131072 },
-  { id: "muse-spark-1.2-contributor-free", object: "model", owned_by: "opencode", context_length: 1048576, max_completion_tokens: 131072 },
+const FALLBACK_FREE = [
+  "beam-free",
+  "flint-40b-free",
+  "mimo-v2.6-flash-free",
+  "nemotron-3.5-super-vl-free",
+  "nemotron-3.5-lightning-free",
+  "deepseek-v4.1-flash-free",
+  "glm-5.3-flash-free",
+  "pulse-alpha-free",
+  "crouton-alpha-free",
 ];
+const FALLBACK = FALLBACK_FREE.flatMap((id) => [
+  { id, object: "model", owned_by: "opencode" },
+  { id: `oc/${id}`, object: "model", owned_by: "opencode" },
+]);
 
 let cache = { at: 0, data: null };
 const TTL = 5 * 60 * 1000;
@@ -16,6 +25,7 @@ module.exports = async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "GET") return res.status(405).json({ error: { message: "method not allowed" } });
+  if (!checkAuth(req)) return res.status(401).json({ error: { message: "invalid api key" } });
 
   const now = Date.now();
   if (cache.data && now - cache.at < TTL) {
@@ -24,7 +34,10 @@ module.exports = async function handler(req, res) {
 
   try {
     const r = await fetch("https://opencode.ai/zen/v1/models", {
-      headers: { Authorization: "Bearer public", "User-Agent": "opencode/1.18.31" },
+      headers: {
+        Authorization: "Bearer public",
+        "User-Agent": `opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/${process.versions.bun || "1.4.4"}`,
+      },
     });
     if (!r.ok) throw new Error(`upstream ${r.status}`);
     const j = await r.json();

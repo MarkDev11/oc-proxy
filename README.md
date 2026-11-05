@@ -1,77 +1,124 @@
 # oc-proxy
 
-Thin OpenAI-compatible proxy for the **opencode.ai free tier** (every `*-free`
-model: `muse-spark-1.3-contributor-free`, `deepseek-v4.1-flash-free`,
-`mimo-v2.6-flash-free`, ...). Vercel-ready, zero dependencies. Logic ported
-from 9Router (PR #4842 opencode v2 fingerprint).
+OpenAI-compatible proxy for the **opencode.ai free tier**. Runs on this machine
+and is exposed to the internet through a **Cloudflare Quick Tunnel** — no Vercel,
+no proxy pool, zero npm dependencies.
 
-## Why this exists
+Current free models (2026-11): `beam-free`, `flint-40b-free`,
+`mimo-v2.6-flash-free`, `nemotron-3.5-super-vl-free`,
+`nemotron-3.5-lightning-free`, `deepseek-v4.1-flash-free`,
+`glm-5.3-flash-free`, `pulse-alpha-free`, `crouton-alpha-free` (plus `oc/`
+aliases). The list is fetched live from upstream and cached for 5 minutes.
 
-Since 2026-10-14, OpenCode v2 moved free inference off `/zen/v1` onto
-`/inference/v1` and every free request returns
-`403 FreeTierError (...only be used from within OpenCode)` unless it carries
-OpenCode's own client fingerprint. This proxy reproduces that fingerprint
-unconditionally, then translates back to OpenAI `chat.completions`:
+## Architecture
 
-* Endpoint `/inference/v1/responses` (muse-spark) or
-  `/inference/v1/chat/completions` (all other `*-free` models).
-* v2 UA `opencode/latest/2.0.26/cli` + `x-opencode-session` **and**
-  `x-opencode-session-id` (a session id whose prefix encodes a small counter).
-* OpenCode's exact `read` + `shell` tool definitions (description + schema are
-  compared verbatim upstream) as decoys, with `tool_choice` forced to `auto`.
-  A caller tool already named `read`/`shell` with a different definition is
-  aliased to `read_client`/`shell_client` and restored on the response.
-
-## Deploy (Vercel)
-
-Option A — dashboard:
-
-1. Push this folder to a new Git repo.
-2. Vercel -> Add New Project -> import the repo. Framework preset: Other.
-3. Env (optional but recommended): `GATEWAY_API_KEY=sk-...` (comma-separated
-   multi-key supported).
-4. Deploy. Base URL: `https://<app>.vercel.app/v1`
-   (`vercel.json` rewrites `/v1/*` -> `/api/v1/*`).
-
-Option B — CLI:
-
-```bash
-npm i -g vercel
-cd oc-proxy
-vercel env add GATEWAY_API_KEY
-vercel --prod
+```
+client (OpenAI SDK / curl / opencode)
+        |
+        v
+https://<random>.trycloudflare.com   Cloudflare Quick Tunnel
+        |
+        v
+127.0.0.1:8791  serve-local.js (Bun)
+        |
+        v
+https://opencode.ai/inference/openai/v1/chat/completions
 ```
 
-Note: `maxDuration: 60` in `vercel.json` only fully applies on the Pro plan.
-On Hobby, function duration is plan-limited — very long agentic runs may get
-cut off. For long runs, consider an HF Space / VPS instead.
+The proxy reproduces the current OpenCode CLI request closely enough for the
+free tier to accept it:
+
+* **Bun runtime** — the upstream fingerprints the TLS/HTTP client. Node and curl
+  get `429 FreeUsageLimitError` even with identical headers/body; Bun (same
+  runtime as OpenCode 1.19.5) passes. `serve-local.js` is therefore started with
+  Bun by the supervisor.
+* **Client headers** — `authorization: Bearer public`, OpenCode UA
+  (`opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/<ver>`),
+  `x-opencode-client: cli`, `x-opencode-project: global`,
+  `x-opencode-request: msg_...`, `x-opencode-session` + `x-opencode-session-id:
+  ses_...`.
+* **Tool fingerprint** — the 11 exact OpenCode tool definitions are appended as
+  decoys. Caller tools with the same name but a different definition are
+  aliased (`read_client`) and restored in the response.
+* **System prompt gate** — the free tier also requires an OpenCode-style
+  `<env>` block in the system prompt. The proxy prepends a small, inert
+  environment block as the first system message; the caller's messages follow
+  unchanged.
+* **Retry** — 429/5xx are retried with capped exponential backoff
+  (`UPSTREAM_MAX_WAIT_MS`, default 120s) because the free tier rate-limits
+  bursts and reports a misleading "until midnight" `retry-after`.
+
+## Requirements
+
+* Linux (tested on Ubuntu under proot/Termux, aarch64)
+* Node.js >= 20.12 (supervisor, dashboard)
+* **Bun** (upstream fingerprint) — `npm i -g bun`
+* `cloudflared` — installed automatically by `npm run install:tunnel`
+
+## Quick start
+
+```bash
+cd ~/oc-proxy
+cp .env.example .env                 # if .env does not exist yet
+# edit .env and set GATEWAY_API_KEY (openssl rand -hex 24)
+npm run install:tunnel               # downloads bin/cloudflared (SHA256 verified)
+npm run bg                           # supervisor + server + tunnel
+npm run status
+```
+
+`npm run bg` prints the local and public URLs. The Quick Tunnel URL is random
+and changes after every restart; it is written to `run/tunnel-url.txt`.
+
+Stop / inspect:
+
+```bash
+npm run stop
+npm run status
+tail -f logs/up.log logs/oc-proxy.log logs/cloudflared.log
+```
+
+Run in the foreground (no tunnel):
+
+```bash
+npm run server        # bun serve-local.js
+```
 
 ## Endpoints
 
-* `GET /v1/models` — lists every `*-free` opencode model (`id` + `oc/` alias),
-  fetched live from upstream and cached 5 min.
-* `POST /v1/chat/completions` — OpenAI shape (`messages`, `tools`,
-  `tool_choice`, `stream`). Any `*-free` model is accepted (400 otherwise).
-* `GET /api/health` — deployment check.
-* `GET /` — live monitor dashboard for this proxy (model state, speed, context
-  fill, recent requests, per-model totals; no hardware cards). Real-time polling
-  runs only while the page is open; stats are in-memory per instance and reset
-  on cold start — nothing is stored.
-* `GET /api/stats` — trimmed request stats snapshot (JSON) behind the dashboard.
+All `/v1/*` endpoints require `Authorization: Bearer $GATEWAY_API_KEY` when the
+key is set. `GET /api/health`, `GET /api/tunnel`, `GET /api/stats` and the
+dashboard are unauthenticated (the server binds to 127.0.0.1 and the tunnel is
+the only public path).
+
+* `GET /v1/models` — every `*-free` model plus `oc/` aliases.
+* `POST /v1/chat/completions` — OpenAI shape: `messages`, `tools`,
+  `tool_choice`, `stream`, `max_tokens`, `temperature`, `top_p`. Any `*-free`
+  model is accepted (400 otherwise).
+* `POST /v1/messages` — Anthropic Messages facade (used by Claude-style
+  clients).
+* `GET /api/health` — health check.
+* `GET /api/tunnel` — `{ "url": "https://...trycloudflare.com" }`.
+* `GET /` — live dashboard (model, speed, context fill, recent requests,
+  per-model totals; in-memory only, resets on restart).
 
 Examples:
 
 ```bash
-curl https://<app>.vercel.app/v1/chat/completions \
-  -H "Authorization: Bearer $GATEWAY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"oc/muse-spark-1.3-contributor-free",
-       "messages":[{"role":"user","content":"reply OK"}]}'
+URL=$(cat run/tunnel-url.txt)
 
-curl -N https://<app>.vercel.app/v1/chat/completions \
+curl "$URL/v1/models" \
+  -H "Authorization: Bearer $GATEWAY_API_KEY"
+
+curl "$URL/v1/chat/completions" \
   -H "Authorization: Bearer $GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model":"oc/muse-spark-1.2-contributor-free",
+  -d '{"model":"deepseek-v4.1-flash-free",
+       "messages":[{"role":"user","content":"Reply with exactly OK"}]}'
+
+curl -N "$URL/v1/chat/completions" \
+  -H "Authorization: Bearer $GATEWAY_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"glm-5.3-flash-free",
        "messages":[{"role":"user","content":"Weather in Jakarta?"}],
        "tools":[{"type":"function","function":{
          "name":"get_weather",
@@ -79,58 +126,48 @@ curl -N https://<app>.vercel.app/v1/chat/completions \
        "tool_choice":"auto","stream":true}'
 ```
 
-## Long tasks (no mid-token cutoffs)
+## Environment
 
-Serverless functions die hard at `maxDuration`, mid-token. This proxy avoids
-that: `SOFT_DEADLINE_MS` (default 50000, counted from the first upstream
-bytes so slow TTFB doesn't eat the budget) plus `ABSOLUTE_DEADLINE_MS`
-(default 55000, final failsafe) stop reading upstream early and close the
-response gracefully with `finish_reason: "length"` (or `"tool_calls"` if a
-tool call already completed). Agent loops treat `"length"` as "continue the
-turn", append the partial output, and resend — so long coding tasks survive
-as a chain of short requests instead of one killed stream.
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` / `HOST` | `8791` / `127.0.0.1` | Local listen address |
+| `GATEWAY_API_KEY` | — | Required gateway key; comma-separated multi-key allowed |
+| `UPSTREAM_BASE_URL` | `https://opencode.ai` | Upstream origin |
+| `OPENCODE_UA` | current OpenCode UA | Override the spoofed user agent |
+| `BUN_BIN` | `bun` | Bun binary used by the supervisor |
+| `UPSTREAM_MAX_WAIT_MS` | `120000` | Max time spent retrying upstream 429/5xx |
+| `UPSTREAM_RETRY_DELAY_MS` | `2000` | Initial retry backoff |
+| `SOFT_DEADLINE_MS` | `0` (off) | Graceful `finish_reason: "length"` cutoff |
+| `ABSOLUTE_DEADLINE_MS` | `0` (off) | Hard request deadline |
+| `CLOUDFLARED_BIN` | `bin/cloudflared` | Tunnel binary |
+| `TUNNEL_PROTOCOL` | auto | Force `http2` / `quic` |
+| `TUNNEL_URL_FILE` | `run/tunnel-url.txt` | Where the supervisor writes the URL |
 
-Tune per plan: Hobby (short limit) -> lower `SOFT_DEADLINE_MS`; Pro ->
-raise both `maxDuration` and the deadline.
+## Troubleshooting
 
-## Proxy fallback (optional, for 429s)
-
-When `PROXY_FALLBACK=1` and `PROXY_POOL_URL` point to a fresh pool (maintained
-by GitHub Actions on the `pool` branch, every 15 min), the proxy retries
-via a healthy HTTP proxy **only** on retryable upstream failures. The
-skip-to-next-relay decision uses status (`429`/`500`/`502`/`503`) **and**
-message patterns: rate limit / quota / FreeUsageLimit errors, region blocks,
-overload / capacity errors, and usage / token-limit errors (e.g. "Output token
-limit reached"). A spent relay is cooled down and the next proxy is tried
-immediately; non-streaming turns that die mid-stream get one extra retry wave.
-Normal requests stay direct — no added latency. Pool
-entries older than 1 hour or transparent proxies are discarded; failed
-proxies are cooled down for 30 min. The pool file is read through jsDelivr,
-which the validator purges on every run so relays stay fresh; entries up to
-6 hours old are still accepted (dead ones get cooled down at runtime, and an
-empty fetch never wipes the last known good list). Pool status
-(`ON · N relays`) is visible on the dashboard and in `GET /api/stats`.
-
-```bash
-PROXY_FALLBACK=1
-PROXY_POOL_URL=https://cdn.jsdelivr.net/gh/MarkDev11/oc-proxy@pool/pool.json
-PROXY_TIMEOUT_MS=25000
-```
-
-## Local check
-
-```bash
-npm run check
-node scripts/validate-pool.js  # writes pool.json locally for testing
-```
+* **`429 FreeUsageLimitError` on every request** — make sure the server runs
+  under Bun (`npm run bg` logs `starting oc-proxy ... (bun)`), and that the
+  request reached the proxy (the `<env>` shim is injected automatically). The
+  free tier still has genuine rate limits; the proxy retries for up to
+  `UPSTREAM_MAX_WAIT_MS`.
+* **`cloudflared` missing** — `npm run install:tunnel`.
+* **Tunnel URL changed** — Quick Tunnels are ephemeral. Read
+  `run/tunnel-url.txt` or `npm run status`. Use a named tunnel if you need a
+  stable hostname.
+* **Tunnel returns 530 / stalls at "Registered tunnel connection"** — QUIC/UDP
+  is unreliable on some networks. Set `TUNNEL_PROTOCOL=http2` in `.env` and
+  restart (`npm run stop && npm run bg`).
+* **Empty completion from `mimo`/`crouton`** — reasoning/upstream flakiness; retry
+  or raise `max_tokens`.
+* **Check syntax** — `npm run check`.
 
 ## Caveats
 
-* The upstream free tier rate-limits aggressively (`429 FreeUsageLimitError`) —
-  that's normal, retry with backoff.
-* The decoy cloak essentially spoofs the `within OpenCode` check. Don't expose
-  publicly without `GATEWAY_API_KEY` + your own rate limiting; upstream may
-  block it at any time.
-* Ported from 9Router's opencode executor + fingerprint (PR #4842). If upstream
-  changes the `/inference/v1` contract or the fingerprint tools, this proxy
-  must be updated too.
+* The proxy spoofs OpenCode's client fingerprint to use the free tier outside
+  the official CLI. This may violate the provider's terms and can be blocked at
+  any time; upstream changes may require updating the tools, headers, or the
+  `<env>` shim.
+* Always set `GATEWAY_API_KEY`. The Quick Tunnel URL is public; without a key
+  anyone who finds it can consume the free quota.
+* No proxy pool, no Vercel: one host, one upstream identity. If the upstream
+  rate-limits this host, requests wait and then fail.
