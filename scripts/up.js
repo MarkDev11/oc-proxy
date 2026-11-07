@@ -1,8 +1,10 @@
 'use strict';
 
-/* Supervisor: run oc-proxy locally and expose it through a Cloudflare Quick
- * Tunnel. Restarts either child if it exits and writes the current public URL
- * to run/tunnel-url.txt (read by GET /api/tunnel and the dashboard).
+/* Supervisor: run oc-proxy locally. By default it also exposes the proxy
+ * through a Cloudflare Quick Tunnel; set TUNNEL_DISABLED=1 to skip that and
+ * use an external tunnel such as Tailscale Funnel. Restarts either child if it
+ * exits and writes the current public URL to run/tunnel-url.txt (read by
+ * GET /api/tunnel and the dashboard).
  *
  * Usage: node scripts/up.js
  */
@@ -24,6 +26,8 @@ const LOG_DIR = path.join(ROOT, 'logs');
 const PID_FILE = path.join(RUN_DIR, 'supervisor.pid');
 const URL_FILE = path.resolve(ROOT, process.env.TUNNEL_URL_FILE || 'run/tunnel-url.txt');
 const CLOUDFLARED = path.resolve(ROOT, process.env.CLOUDFLARED_BIN || 'bin/cloudflared');
+const TUNNEL_DISABLED = /^(1|true|yes|on)$/i.test((process.env.TUNNEL_DISABLED || '').trim());
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').trim();
 
 fs.mkdirSync(RUN_DIR, { recursive: true });
 fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -33,7 +37,7 @@ if (!API_KEY) {
   console.error('[up] GATEWAY_API_KEY kosong. Isi dulu di .env sebelum expose ke publik.');
   process.exit(1);
 }
-if (!fs.existsSync(CLOUDFLARED)) {
+if (!TUNNEL_DISABLED && !fs.existsSync(CLOUDFLARED)) {
   console.error(`[up] cloudflared tidak ada di ${CLOUDFLARED}. Jalankan: npm run install:tunnel`);
   process.exit(1);
 }
@@ -97,6 +101,17 @@ async function waitHealthy(timeoutMs) {
 
 function startTunnel() {
   if (stopping) return;
+  if (TUNNEL_DISABLED) {
+    log('cloudflare tunnel disabled (TUNNEL_DISABLED=1)');
+    try {
+      fs.unlinkSync(URL_FILE);
+    } catch {}
+    if (PUBLIC_URL) {
+      fs.writeFileSync(URL_FILE, `${PUBLIC_URL}\n`);
+      log(`public URL: ${PUBLIC_URL}`);
+    }
+    return;
+  }
   try {
     fs.unlinkSync(URL_FILE);
   } catch {}

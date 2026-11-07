@@ -14,6 +14,7 @@ const {
   splitFrames,
   parseFrame,
   makeTranslator,
+  summarizeBody,
 } = require("../../../lib/opencode");
 const stats = require("../../../lib/stats");
 
@@ -51,33 +52,85 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchUpstream(url, { headers, body }) {
+async function fetchUpstream(url, { headers, body, signal, log }) {
   const maxWait = Math.max(5000, parseInt(process.env.UPSTREAM_MAX_WAIT_MS || "120000", 10) || 120000);
   const baseDelay = Math.max(500, parseInt(process.env.UPSTREAM_RETRY_DELAY_MS || "2000", 10) || 2000);
+  const timeoutMs = Math.max(3000, parseInt(process.env.UPSTREAM_CONNECT_TIMEOUT_MS || "20000", 10) || 20000);
   const started = Date.now();
   let attempt = 0;
   let lastError = null;
-  for (;;) {
-    attempt++;
+
+  async function attemptFetch() {
+    const ac = new AbortController();
+    let timedOut = false;
+    const onClientAbort = () => ac.abort(signal?.reason);
+    if (signal?.aborted) throw new Error("client disconnected");
+    signal?.addEventListener("abort", onClientAbort, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ac.abort();
+    }, timeoutMs);
     try {
-      const r = await fetch(url, { method: "POST", headers, body });
+      return await fetch(url, { method: "POST", headers, body, signal: ac.signal });
+    } catch (e) {
+      if (timedOut) {
+        throw Object.assign(new Error(`upstream timeout after ${timeoutMs}ms`), { code: "UPSTREAM_TIMEOUT" });
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onClientAbort);
+    }
+  }
+
+  for (;;) {
+    if (signal?.aborted) throw new Error("client disconnected");
+    attempt++;
+    log?.write(`[upstream] attempt ${attempt}`);
+    try {
+      const r = await attemptFetch();
+      log?.write(`[upstream] status=${r.status} retry-after=${r.headers.get("retry-after") || "0"}s`);
       if (!RETRYABLE_STATUS.has(r.status)) return r;
       const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10) || 0;
+      // A long 429 retry-after means free-quota exhaustion, not a transient
+      // blip. Retrying for 90s only makes the harness look like a timeout.
+      if (r.status === 429 && retryAfter > 300) {
+        console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
+        log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
+        return r;
+      }
       const backoff = Math.min(30000, baseDelay * 2 ** (attempt - 1));
-      // The free tier reports a generic "until midnight" retry-after even for
-      // short bursts, so cap how long we honor it instead of failing instantly.
-      const delay = Math.min(30000, Math.max(retryAfter * 1000, backoff));
-      if (Date.now() - started + delay > maxWait) return r;
+      // 429 retry-after is usually a generic "until midnight" value; cap it.
+      // 5xx are transient connect timeouts, so retry quickly instead of
+      // waiting for a long retry-after that outlives the harness timeout.
+      const delay =
+        r.status === 429
+          ? Math.min(30000, Math.max(retryAfter * 1000, backoff))
+          : Math.min(5000, Math.max(1000, retryAfter * 1000, backoff));
+      if (Date.now() - started + delay > maxWait) {
+        console.warn(`[oc-proxy] upstream ${r.status} (retry-after ${retryAfter}s); giving up after ${attempt} attempt(s)`);
+        log?.write(`[upstream] giving up after ${attempt} attempt(s)`);
+        return r;
+      }
       try {
         await r.body?.cancel();
       } catch {}
+      if (signal?.aborted) throw new Error("client disconnected");
       console.warn(`[oc-proxy] upstream ${r.status} (retry-after ${retryAfter}s); retry ${attempt} in ${delay}ms`);
+      log?.write(`[upstream] retry in ${delay}ms`);
       await sleep(delay);
     } catch (e) {
       lastError = e;
+      if (signal?.aborted) throw e;
+      log?.write(`[upstream] error: ${e.message}`);
+      if (e.code === "UPSTREAM_TIMEOUT") {
+        log?.write(`[upstream] timeout; not retrying`);
+        throw e;
+      }
       const delay = Math.min(30000, baseDelay * 2 ** (attempt - 1));
       if (Date.now() - started + delay > maxWait) throw e;
       console.warn(`[oc-proxy] upstream error (${e.message}); retry ${attempt} in ${delay}ms`);
+      log?.write(`[upstream] retry in ${delay}ms`);
       await sleep(delay);
     }
   }
@@ -127,7 +180,16 @@ module.exports = async function handler(req, res) {
     upBody = built.body;
     renameMap = built.map;
   } catch (e) {
+    req.log?.write(`[handler] buildUpstreamBody failed: ${e.message}`);
     return res.status(400).json({ error: { message: e.message } });
+  }
+
+  if (req.log) {
+    req.log.write("=== UPSTREAM REQUEST META ===");
+    req.log.write(JSON.stringify(summarizeBody(upBody)));
+    const full = JSON.stringify(upBody);
+    req.log.write("=== UPSTREAM REQUEST BODY ===");
+    req.log.raw(full.slice(0, 4 * 1024 * 1024) + (full.length > 4 * 1024 * 1024 ? "\n[truncated]\n" : "\n"));
   }
 
   const headers = buildHeaders({
@@ -137,16 +199,27 @@ module.exports = async function handler(req, res) {
 
   let upstream;
   try {
-    upstream = await fetchUpstream(upstreamUrl(displayModel), { headers, body: JSON.stringify(upBody) });
+    upstream = await fetchUpstream(upstreamUrl(displayModel), {
+      headers,
+      body: JSON.stringify(upBody),
+      signal: req.signal,
+      log: req.log,
+    });
   } catch (e) {
+    req.log?.write(`[handler] upstream unreachable: ${e.message}`);
     stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
     return res.status(502).json({ error: { message: `upstream unreachable: ${e.message}` } });
   }
   if (!upstream.ok || !upstream.body) {
+    req.log?.write(`[upstream] final status=${upstream.status} (not retryable or gave up)`);
     const err = await forwardUpstreamError(upstream);
+    const retryAfter = upstream.headers.get("retry-after");
+    if (retryAfter) res.setHeader("Retry-After", retryAfter);
+    req.log?.write(`[client] returning upstream error status=${err.status} retry-after=${retryAfter || "0"}s`);
     stats.record({ m: displayModel, ok: false, st: err.status, ms: Date.now() - t0, fin: "error" });
     return res.status(err.status).json(err.body);
   }
+  req.log?.write(`[upstream] streaming response status=${upstream.status}`);
 
   let tr = makeTranslator(displayModel, renameMap);
   let reader = upstream.body.getReader();
@@ -175,6 +248,7 @@ module.exports = async function handler(req, res) {
   if (!clientWantsStream) {
     try {
       let buf = "";
+      req.log?.write("=== UPSTREAM RESPONSE (RAW SSE) ===");
       for (;;) {
         if (expired()) {
           cutOff();
@@ -183,7 +257,9 @@ module.exports = async function handler(req, res) {
         const { done, value } = await reader.read();
         if (done) break;
         if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
-        buf += decoder.decode(value, { stream: true });
+        const chunkText = decoder.decode(value, { stream: true });
+        req.log?.raw(chunkText);
+        buf += chunkText;
         const { frames, rest } = splitFrames(buf);
         buf = rest;
         for (const f of frames) {
@@ -195,6 +271,7 @@ module.exports = async function handler(req, res) {
       }
       const tail = decoder.decode();
       if (tail) {
+        req.log?.raw(tail);
         const { frames } = splitFrames(tail);
         for (const f of frames) {
           const p = parseFrame(f);
@@ -237,6 +314,7 @@ module.exports = async function handler(req, res) {
   const enc = new TextEncoder();
   try {
     let buf = "";
+    req.log?.write("=== UPSTREAM RESPONSE (RAW SSE) ===");
     for (;;) {
       if (expired()) {
         cutOff();
@@ -245,7 +323,9 @@ module.exports = async function handler(req, res) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!firstBytesAt && value && value.length) firstBytesAt = Date.now();
-      buf += decoder.decode(value, { stream: true });
+      const chunkText = decoder.decode(value, { stream: true });
+      req.log?.raw(chunkText);
+      buf += chunkText;
       const { frames, rest } = splitFrames(buf);
       buf = rest;
       for (const f of frames) {

@@ -25,6 +25,8 @@ fi
 
 if [[ -s run/tunnel-url.txt ]]; then
   echo "public: $(cat run/tunnel-url.txt)"
+elif [[ "${TUNNEL_DISABLED:-0}" == "1" ]]; then
+  echo "tunnel: disabled (TUNNEL_DISABLED=1)"
 else
   echo "public: tunnel URL not available"
 fi

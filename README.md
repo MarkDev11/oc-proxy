@@ -1,8 +1,9 @@
 # oc-proxy
 
 OpenAI-compatible proxy for the **opencode.ai free tier**. Runs on this machine
-and is exposed to the internet through a **Cloudflare Quick Tunnel** — no Vercel,
-no proxy pool, zero npm dependencies.
+and is exposed to the internet through a **Tailscale Funnel** (public HTTPS).
+A Cloudflare Quick Tunnel remains available as an optional alternative — no
+Vercel, no proxy pool, zero npm dependencies.
 
 Current free models (2026-11): `beam-free`, `flint-40b-free`,
 `mimo-v2.6-flash-free`, `nemotron-3.5-super-vl-free`,
@@ -16,7 +17,7 @@ aliases). The list is fetched live from upstream and cached for 5 minutes.
 client (OpenAI SDK / curl / opencode)
         |
         v
-https://<random>.trycloudflare.com   Cloudflare Quick Tunnel
+https://<node>.<tailnet>.ts.net   Tailscale Funnel (public HTTPS)
         |
         v
 127.0.0.1:8791  serve-local.js (Bun)
@@ -28,32 +29,44 @@ https://opencode.ai/inference/openai/v1/chat/completions
 The proxy reproduces the current OpenCode CLI request closely enough for the
 free tier to accept it:
 
-* **Bun runtime** — the upstream fingerprints the TLS/HTTP client. Node and curl
-  get `429 FreeUsageLimitError` even with identical headers/body; Bun (same
-  runtime as OpenCode 1.19.5) passes. `serve-local.js` is therefore started with
-  Bun by the supervisor.
+* **Bun runtime** — the upstream fingerprints the TLS/HTTP client. The proxy
+  and supervisor run under Bun (same runtime as OpenCode 1.19.5). Bare
+  Node/curl requests can be rejected with `429` and are not valid health
+  checks for the upstream.
 * **Client headers** — `authorization: Bearer public`, OpenCode UA
   (`opencode/1.19.5 ai-sdk/provider-utils/4.0.23 runtime/bun/<ver>`),
   `x-opencode-client: cli`, `x-opencode-project: global`,
   `x-opencode-request: msg_...`, `x-opencode-session` + `x-opencode-session-id:
   ses_...`.
+* **Tool budget** — the free tier rejects requests with more than 33
+  non-OpenCode tools using a misleading `429 FreeUsageLimitError`. Callers with
+  more than 33 tools are reduced to a verified-safe 33-tool core; the 11 exact
+  OpenCode fingerprint tools are appended, for 44 total.
 * **Tool fingerprint** — the 11 exact OpenCode tool definitions are appended as
   decoys. Caller tools with the same name but a different definition are
-  aliased (`read_client`) and restored in the response.
-* **System prompt gate** — the free tier also requires an OpenCode-style
-  `<env>` block in the system prompt. The proxy prepends a small, inert
-  environment block as the first system message; the caller's messages follow
-  unchanged.
+  aliased (`read_client`) and restored in the response; appended fingerprint
+  tools that have no caller equivalent are marked unavailable in the prompt.
+* **Environment metadata** — OpenCode sends an `<env>` block in the system
+  prompt. The proxy prepends the same inert block for fingerprint fidelity; it
+  is not sufficient alone.
 * **Retry** — 429/5xx are retried with capped exponential backoff
   (`UPSTREAM_MAX_WAIT_MS`, default 120s) because the free tier rate-limits
-  bursts and reports a misleading "until midnight" `retry-after`.
+  bursts and reports a misleading "until midnight" `retry-after`. A 429 with
+  `retry-after > 300s` is surfaced immediately instead of stalling.
+
+## Documentation
+
+Detailed notes live in [`docs/`](docs/README.md): current status and known
+issues, the 429/tool-budget investigation, harness notes, operations runbook,
+architecture, and history.
 
 ## Requirements
 
 * Linux (tested on Ubuntu under proot/Termux, aarch64)
 * Node.js >= 20.12 (supervisor, dashboard)
 * **Bun** (upstream fingerprint) — `npm i -g bun`
-* `cloudflared` — installed automatically by `npm run install:tunnel`
+* **Tailscale** (userspace `tailscaled`, no TUN/root) for Funnel
+* `cloudflared` — only for the optional Cloudflare Quick Tunnel
 
 ## Quick start
 
@@ -61,13 +74,14 @@ free tier to accept it:
 cd ~/oc-proxy
 cp .env.example .env                 # if .env does not exist yet
 # edit .env and set GATEWAY_API_KEY (openssl rand -hex 24)
-npm run install:tunnel               # downloads bin/cloudflared (SHA256 verified)
-npm run bg                           # supervisor + server + tunnel
+npm run bg                           # supervisor + server (+ Cloudflare if enabled)
 npm run status
 ```
 
-`npm run bg` prints the local and public URLs. The Quick Tunnel URL is random
-and changes after every restart; it is written to `run/tunnel-url.txt`.
+`npm run bg` prints the local and public URLs. With Tailscale Funnel the
+hostname is stable and comes from `PUBLIC_URL`; a Quick Tunnel URL (if enabled)
+is random and changes after every restart. Both are written to
+`run/tunnel-url.txt`.
 
 Stop / inspect:
 
@@ -83,6 +97,41 @@ Run in the foreground (no tunnel):
 npm run server        # bun serve-local.js
 ```
 
+## Public access
+
+### Tailscale Funnel (current setup)
+
+Tailscale runs in userspace mode, so it works under proot without
+`/dev/net/tun` or root:
+
+```bash
+tailscaled --tun=userspace-networking \
+  --state=/var/lib/tailscale/tailscaled.state \
+  --socket=/var/run/tailscale/tailscaled.sock \
+  --socks5-server=127.0.0.1:1055 \
+  --outbound-http-proxy-listen=127.0.0.1:1055 &
+
+tailscale --socket=/var/run/tailscale/tailscaled.sock up \
+  --hostname=<node> --accept-dns=false --accept-routes=false --netfilter-mode=off
+tailscale --socket=/var/run/tailscale/tailscaled.sock funnel --bg 8791
+```
+
+Set these in `.env`, then `npm run stop && npm run bg`:
+
+```bash
+TUNNEL_DISABLED=1
+PUBLIC_URL=https://<node>.<tailnet>.ts.net
+```
+
+Funnel is public; the gateway key still protects `/v1/*`. For tailnet-only
+access, use `tailscale serve --bg 8791` instead of `funnel`.
+
+### Cloudflare Quick Tunnel (optional)
+
+Keep `TUNNEL_DISABLED=0` (the default), run `npm run install:tunnel` once, then
+`npm run bg`. Use `TUNNEL_PROTOCOL=http2` if QUIC/UDP is unreliable on your
+network.
+
 ## Endpoints
 
 All `/v1/*` endpoints require `Authorization: Bearer $GATEWAY_API_KEY` when the
@@ -97,7 +146,7 @@ the only public path).
 * `POST /v1/messages` — Anthropic Messages facade (used by Claude-style
   clients).
 * `GET /api/health` — health check.
-* `GET /api/tunnel` — `{ "url": "https://...trycloudflare.com" }`.
+* `GET /api/tunnel` — `{ "url": "https://<public-host>" }`.
 * `GET /` — live dashboard (model, speed, context fill, recent requests,
   per-model totals; in-memory only, resets on restart).
 
@@ -137,9 +186,13 @@ curl -N "$URL/v1/chat/completions" \
 | `BUN_BIN` | `bun` | Bun binary used by the supervisor |
 | `UPSTREAM_MAX_WAIT_MS` | `120000` | Max time spent retrying upstream 429/5xx |
 | `UPSTREAM_RETRY_DELAY_MS` | `2000` | Initial retry backoff |
+| `UPSTREAM_CONNECT_TIMEOUT_MS` | `20000` | Per-attempt connect timeout; not retried |
 | `SOFT_DEADLINE_MS` | `0` (off) | Graceful `finish_reason: "length"` cutoff |
 | `ABSOLUTE_DEADLINE_MS` | `0` (off) | Hard request deadline |
-| `CLOUDFLARED_BIN` | `bin/cloudflared` | Tunnel binary |
+| `REQUEST_LOG_ENABLED` | `0` | Enable per-request body logging; off by default |
+| `TUNNEL_DISABLED` | `0` | Skip the built-in Cloudflare Quick Tunnel |
+| `PUBLIC_URL` | — | External URL written to `run/tunnel-url.txt` |
+| `CLOUDFLARED_BIN` | `bin/cloudflared` | Cloudflare tunnel binary |
 | `TUNNEL_PROTOCOL` | auto | Force `http2` / `quic` |
 | `TUNNEL_URL_FILE` | `run/tunnel-url.txt` | Where the supervisor writes the URL |
 
@@ -150,13 +203,17 @@ curl -N "$URL/v1/chat/completions" \
   request reached the proxy (the `<env>` shim is injected automatically). The
   free tier still has genuine rate limits; the proxy retries for up to
   `UPSTREAM_MAX_WAIT_MS`.
-* **`cloudflared` missing** — `npm run install:tunnel`.
-* **Tunnel URL changed** — Quick Tunnels are ephemeral. Read
-  `run/tunnel-url.txt` or `npm run status`. Use a named tunnel if you need a
+* **`cloudflared` missing** — only needed for the Quick Tunnel:
+  `npm run install:tunnel`.
+* **Funnel returns 502** — the local server or `tailscaled` is down. Check
+  `npm run status` and `tailscale funnel status`; restart `tailscaled` if
+  needed.
+* **Quick Tunnel URL changed** — Quick Tunnels are ephemeral. Read
+  `run/tunnel-url.txt` or `npm run status`. Use Funnel or a named tunnel for a
   stable hostname.
-* **Tunnel returns 530 / stalls at "Registered tunnel connection"** — QUIC/UDP
-  is unreliable on some networks. Set `TUNNEL_PROTOCOL=http2` in `.env` and
-  restart (`npm run stop && npm run bg`).
+* **Cloudflare tunnel returns 530 / stalls at "Registered tunnel connection"** —
+  QUIC/UDP is unreliable on some networks. Set `TUNNEL_PROTOCOL=http2` in
+  `.env` and restart (`npm run stop && npm run bg`).
 * **Empty completion from `mimo`/`crouton`** — reasoning/upstream flakiness; retry
   or raise `max_tokens`.
 * **Check syntax** — `npm run check`.
@@ -167,7 +224,7 @@ curl -N "$URL/v1/chat/completions" \
   the official CLI. This may violate the provider's terms and can be blocked at
   any time; upstream changes may require updating the tools, headers, or the
   `<env>` shim.
-* Always set `GATEWAY_API_KEY`. The Quick Tunnel URL is public; without a key
-  anyone who finds it can consume the free quota.
+* Always set `GATEWAY_API_KEY`. Funnel and Quick Tunnel URLs are public; without
+  a key anyone who finds them can consume the free quota.
 * No proxy pool, no Vercel: one host, one upstream identity. If the upstream
   rate-limits this host, requests wait and then fail.

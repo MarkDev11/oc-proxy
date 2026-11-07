@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Start oc-proxy + Cloudflare Quick Tunnel in the background.
+# Start oc-proxy in the background. Also starts a Cloudflare Quick Tunnel
+# unless TUNNEL_DISABLED=1 (for example when using Tailscale Funnel).
 # Logs: logs/up.log, logs/oc-proxy.log, logs/cloudflared.log
 # Stop: bash scripts/stop.sh
 #
@@ -18,13 +19,14 @@ fi
 PORT="${PORT:-8791}"
 HOST="${HOST:-127.0.0.1}"
 CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-bin/cloudflared}"
+TUNNEL_DISABLED="${TUNNEL_DISABLED:-0}"
 
 if [[ -z "${GATEWAY_API_KEY:-}" ]]; then
   echo "GATEWAY_API_KEY kosong. Isi dulu di .env." >&2
   exit 1
 fi
 
-if [[ ! -x "$CLOUDFLARED_BIN" ]]; then
+if [[ "$TUNNEL_DISABLED" != "1" && ! -x "$CLOUDFLARED_BIN" ]]; then
   bash scripts/install-cloudflared.sh
 fi
 
@@ -49,6 +51,15 @@ if ! curl -fsS "http://${HOST}:${PORT}/api/health" >/dev/null 2>&1; then
   exit 1
 fi
 echo "local: http://${HOST}:${PORT}"
+
+if [[ "$TUNNEL_DISABLED" == "1" ]]; then
+  if [[ -n "${PUBLIC_URL:-}" ]]; then
+    echo "public: ${PUBLIC_URL}"
+  else
+    echo "tunnel: disabled (TUNNEL_DISABLED=1)"
+  fi
+  exit 0
+fi
 
 for _ in $(seq 1 60); do
   if [[ -s run/tunnel-url.txt ]]; then
