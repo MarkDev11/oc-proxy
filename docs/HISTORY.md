@@ -102,8 +102,9 @@ Catatan kronologis pekerjaan pada deployment ini. Tanggal utama:
   `schedule_list`, `schedule_view`, lalu ditambah `write`, `web_fetch`,
   `web_search`, `todo_write`.
 - 33 safe + 11 decoy = 44 → **200**.
-- `capClientTools()` sekarang memakai `SAFE_CLIENT_TOOLS`; caller <=33 tidak
-  dipotong; caller >33 diambil 33 nama safe lalu fallback.
+- `capClientTools()` sekarang memakai `SAFE_CLIENT_TOOLS` (OpenCode) atau
+  `HERMES_SAFE_TOOLS` (Hermes); caller <=33 tidak dipotong; caller >33 diambil
+  33 nama safe lalu fallback.
 - Tool caller yang bentrok nama/schema di-rename `*_client`; 11 FP di-append;
   FP tanpa padanan diberi catatan placeholder.
 - `docs/` dibuat; README diperbarui.
@@ -128,7 +129,7 @@ Catatan kronologis pekerjaan pada deployment ini. Tanggal utama:
 - Log/payload berpotensi memuat secret; redaksi belum lengkap.
 - Tailscale masih manual; helper belum ada.
 - Airplane mode side task butuh root/Magisk/ADB/Shizuku.
-- Perubahan belum di-commit.
+- Perubahan di-commit dan di-push ke `reverse-oc-proxy` (lihat `STATUS.md`).
 
 ## 10. Next
 
@@ -138,3 +139,22 @@ Catatan kronologis pekerjaan pada deployment ini. Tanggal utama:
   `web_fetch`, `web_search`, `todo_write`, `subagent`.
 - Amankan/rotasi secret dan bersihkan log uji.
 - Buat helper Tailscale; commit setelah diminta.
+
+## 11. Hermes desktop agent (2026-11-07)
+
+- Request logging dinyalakan lagi (`REQUEST_LOG_ENABLED=1`) untuk menangkap
+  percobaan Hermes.
+- Request Hermes tercatat di
+  `logs/requests/2026-11-07T10-53-31-141Z-mw6aca6d-4d376b5f.log`:
+  37 client tool, 38 message, 44 upstream tool, status **429** dengan
+  `retry-after 47186s`.
+- History Hermes yang sama + core 15 tool → **200**, jadi history/ukuran body
+  bukan penyebab utama.
+- Cap lama memilih 33 tool Hermes pertama dan membuang `write_file`,
+  `web_extract`, `tour`, `vision_analyze`; kombinasi itu memicu 429.
+- `HERMES_SAFE_TOOLS` ditambahkan: 33 tool (file/shell/web/delegation/skill
+  view/project/UI/browser/exec), mengecualikan `setup_mcp`, `skill_manage`,
+  `skills_list`, `text_to_speech`.
+- Replay body Hermes identik: **200** lokal; **200** via Funnel publik
+  (~24 detik).
+- `npm run check`: **OK**; server di-restart dengan kode baru.

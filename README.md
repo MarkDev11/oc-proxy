@@ -41,7 +41,9 @@ free tier to accept it:
 * **Tool budget** — the free tier rejects requests with more than 33
   non-OpenCode tools using a misleading `429 FreeUsageLimitError`. Callers with
   more than 33 tools are reduced to a verified-safe 33-tool core; the 11 exact
-  OpenCode fingerprint tools are appended, for 44 total.
+  OpenCode fingerprint tools are appended, for 44 total. Hermes/desktop
+  toolsets use a separate tested-safe 33 (MCP setup, skill manage/list, and TTS
+  excluded).
 * **Tool fingerprint** — the 11 exact OpenCode tool definitions are appended as
   decoys. Caller tools with the same name but a different definition are
   aliased (`read_client`) and restored in the response; appended fingerprint

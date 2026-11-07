@@ -1,6 +1,6 @@
 # Status
 
-Last updated: **2026-11-06** (sesi perbaikan 429 + docs).
+Last updated: **2026-11-07** (Hermes/desktop toolset + logging opt-in).
 
 ## Ringkasan
 
@@ -8,12 +8,14 @@ Proxy berjalan di Bun, Tailscale Funnel aktif, dan request harness penuh yang
 sebelumnya selalu `429 FreeUsageLimitError` sekarang diterima upstream
 (**HTTP 200**) melalui proxy lokal. Perbaikan utama: batas **33 tool
 non-OpenCode** + 11 decoy OpenCode, dengan pemilihan 33 tool inti yang sudah
-diverifikasi.
+diverifikasi. Hermes/desktop agent memakai toolset berbeda dan sekarang punya
+**Hermes-safe 33** sendiri; request Hermes identik berhasil **200** lewat lokal
+maupun Funnel publik.
 
-Masih ada satu caveat: uji payload penuh lewat **Funnel publik** mendapatkan
-header HTTP/2 200 dan awal SSE, tetapi curl melaporkan koneksi terputus setelah
-244 byte. Uji lokal penuh berhasil. Perlu validasi dengan harness asli dan
-investigasi Funnel/HTTP2.
+Caveat Funnel: payload harness penuh lewat curl **HTTP/2** pernah abort setelah
+244 byte. Replay Hermes via Node `fetch` publik dan full harness via
+`curl --http1.1` sama-sama **200**; perilaku HTTP/2 belum dijelaskan dan masih
+perlu validasi dengan harness asli.
 
 ## Yang sudah bekerja
 
@@ -32,8 +34,13 @@ investigasi Funnel/HTTP2.
   default **mati**.
 - Tool cap 33 + 11 decoy; caller tools yang berbeda definisi di-rename ke
   `*_client`; tool FP yang tidak punya padanan ditandai placeholder.
+- Hermes/desktop toolset dideteksi via `read_file` + `search_files` +
+  `terminal`; `HERMES_SAFE_TOOLS` memilih 33 tool yang sudah diuji, dengan
+  `setup_mcp`, `skill_manage`, `skills_list`, `text_to_speech` dikecualikan.
 - Request harness penuh via proxy lokal: **200**, upstream **44 tool**,
   377 input item, 405.770 byte.
+- Request Hermes identik (37 client tool, history 38 message): **200**,
+  upstream **44 tool**; replay via Funnel publik **200** (~24 detik).
 - Request langsung ke upstream dengan body hasil `buildUpstreamBody()`:
   **200** untuk `glm-5.3-flash-free`.
 - `npm run check`: **OK**.
@@ -107,6 +114,12 @@ mengaktifkan airplane mode dan mempertahankan akses lokal.
 | Direct upstream, safe 33 + 11 | 44 tools, full harness | **200** |
 | Proxy lokal, full harness | 52 client tools → 44 upstream | **200**, 6,3s |
 | Public Funnel, full harness | 52 client tools → 44 upstream | **HTTP/2 200**, SSE mulai, lalu curl abort setelah 244 byte |
+| Public Funnel, full harness `--http1.1` | 52 client tools → 44 upstream | **200**, 27,4s, 1.861 byte |
+| Hermes exact, cap lama | 37 client tools → 44 upstream | **429**, `retry-after 47186s` |
+| Hermes exact, core 15 + history | 26 tools | **200** |
+| Hermes exact, Hermes-safe 33 + 11 | 44 upstream, exclude 4 | **200** lokal |
+| Hermes exact via public Funnel | 44 upstream | **200**, ~24s |
+| Hermes `mcp_skills` group + core | 19 caller | **429**; tool individual **200** |
 | `npm run check` | static syntax | **OK** |
 | Health lokal | `GET /api/health` | **ok**, `bun/1.4.4` |
 | 33 client + 11 decoy (baseline) | 44 tools | **200** |
@@ -125,27 +138,29 @@ bukan jaminan upstream selalu stabil.
 
 ## Next actions (prioritas)
 
-1. **Validasi Funnel dengan harness asli.** Kirim request agentic nyata lewat
-   URL publik. Jika masih abort, uji `curl --http1.1`, tanpa `-D`, dan cek
-   `tailscale funnel status`/log `tailscaled`.
+1. **Validasi harness agentic asli.** Request Hermes identik sudah 200 lewat
+   publik; lanjutkan dengan loop tool call nyata. Jika HTTP/2 abort, uji
+   `curl --http1.1`, tanpa `-D`, dan cek `tailscale funnel status`/log
+   `tailscaled`.
 2. **Uji tool call end-to-end.** Pastikan model memanggil `write_client`,
    `edit_client`, `read_client`, `web_fetch`, `todo_write`, `subagent`, `pwsh`
-   dan proxy mengembalikan nama tool yang dikenal harness.
+   untuk OpenCode, serta `read_file`/`write_file`/`terminal`/`patch` untuk
+   Hermes; proxy harus mengembalikan nama tool yang dikenal client.
 3. **Amankan log.** Hapus log uji yang memuat kredensial; rotasi key yang
-   terekspos; pertimbangkan `LOG_BODY=0` atau redaksi yang lebih agresif.
+   terekspos; logging default mati, aktifkan hanya saat debugging.
 4. **Reproduksi/atasi 503 23 detik.** Cek apakah harness mengirim
    `AbortController`/timeout sendiri; bandingkan dengan timeout 20 detik proxy.
 5. **Buat helper Tailscale** agar Funnel bisa dinyalakan ulang setelah reboot.
-6. **Commit** hanya setelah diminta; sertakan docs dan perubahan kode.
 
 ## Git
 
 ```
 branch: reverse-oc-proxy
-last commit: b42e230 feat: OpenCode 1.19.5 reverse proxy via Bun + Cloudflare Tunnel
-working tree: modified (belum commit)
+remote: MarkDev11/oc-proxy
+commits: cap + logging opt-in + docs, lalu Hermes-safe cap
+working tree: bersih setelah commit Hermes fix
 ```
 
-File yang berubah: `.env.example`, `README.md`, `api/v1/chat/completions.js`,
+File utama: `.env.example`, `README.md`, `api/v1/chat/completions.js`,
 `api/v1/messages.js`, `lib/opencode.js`, `scripts/start.sh`,
 `scripts/status.sh`, `scripts/up.js`, `serve-local.js`, plus folder `docs/`.

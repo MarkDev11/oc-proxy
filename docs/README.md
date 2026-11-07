@@ -31,10 +31,11 @@ baru.
   **44 tool total**.
 - Request harness penuh (payload 52 tool, 375 message) melalui proxy lokal
   sekarang **HTTP 200**, upstream melihat **44 tool**, 377 input item.
-- Request yang sama melalui **Tailscale Funnel publik** sempat mengembalikan
-  header **HTTP/2 200** dan awal SSE, tetapi koneksi curl terputus
-  (`Recv failure: Software caused connection abort`) setelah 244 byte. Ini
-  masih perlu diuji ulang dengan harness asli; detail di `STATUS.md`.
+- Hermes/desktop agent memakai `HERMES_SAFE_TOOLS` 33; request Hermes asli
+  yang sebelumnya 429 sekarang **200** lewat lokal dan Funnel publik.
+- Payload penuh lewat **Tailscale Funnel HTTP/2** sempat abort setelah 244
+  byte; versi `--http1.1` dan replay Hermes via Node `fetch` **200**. Detail
+  di `STATUS.md`.
 - Ada risiko keamanan: payload harness dan log request (jika logging
   diaktifkan) dapat memuat kredensial pihak ketiga di dalam isi
   message/tool result. Jangan membagikan file

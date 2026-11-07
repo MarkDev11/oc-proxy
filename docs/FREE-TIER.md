@@ -113,6 +113,38 @@ masuk, `update_goal`, `workflow`, `working_directory`, `subagent_fork`) tidak
 dikirim ke upstream. Beberapa tetap bisa dipakai lewat `pwsh`/tool lain; tidak
 ada dispatcher saat ini.
 
+## Hermes / desktop toolset
+
+Hermes tidak memakai nama tool OpenCode. `capClientTools()` mendeteksi toolset
+Hermes bila ada `read_file` + `search_files` + `terminal` dan tidak ada `bash`.
+Untuk toolset ini dipakai `HERMES_SAFE_TOOLS` (33 tool):
+
+```text
+read_file, write_file, patch, search_files, terminal, process,
+web_search, web_extract, todo, session_search, delegate_task,
+memory, skill_view, clarify, cronjob,
+project_create, project_list, project_switch,
+annotate_preview, apply_layout, close_preview, close_terminal,
+drive_preview, focus_pane, open_preview, read_preview,
+read_terminal, read_window_below, browser_exec, computer_use,
+execute_code, tour, vision_analyze
+```
+
+Empat tool berikut sengaja dikecualikan karena kombinasinya memicu 429:
+`setup_mcp`, `skill_manage`, `skills_list`, `text_to_speech`. Masing-masing
+tool bisa 200 sendirian, tetapi grup tersebut + history Hermes konsisten 429
+dengan `retry-after` ~46k detik. Fallback cap juga tidak menambahkan keempat
+tool itu.
+
+Verifikasi 2026-11-07:
+
+- Body Hermes asli: 37 client tool, 38 message, model
+  `deepseek-v4.1-flash-free`.
+- Cap lama (33 tool pertama) → **429** (`retry-after 47186s`).
+- History yang sama + core 15 tool → **200**.
+- History yang sama + `HERMES_SAFE_TOOLS` 33 + 11 decoy → **200** lokal dan
+  **200** via Funnel publik (~24 detik), upstream 44 tool.
+
 ## Percobaan yang gagal / tidak terbukti
 
 | Hipotesis | Hasil |
@@ -136,8 +168,9 @@ menyimpulkan sebuah tool diblokir; ulangi dengan jeda dan kontrol baseline.
 ## Perilaku kode sekarang
 
 - `capClientTools()` hanya aktif jika `tools.length > 33`.
-- Tool yang dipertahankan: nama di `SAFE_CLIENT_TOOLS` (33), lalu fallback ke
-  tool caller berikutnya bila slot masih kosong.
+- Tool yang dipertahankan: `HERMES_SAFE_TOOLS` untuk toolset Hermes, atau
+  `SAFE_CLIENT_TOOLS` untuk OpenCode; fallback mengisi slot kosong dan
+  melewati `HERMES_UNSAFE_TOOLS` pada toolset Hermes.
 - Output tool tetap dalam **urutan asli caller**, bukan urutan priority.
 - `concealFingerprintNames()`:
   - Jika caller punya nama FP dengan definisi **sama persis**, tool dipakai
