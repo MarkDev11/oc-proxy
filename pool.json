@@ -1,18 +1,12 @@
 {
-  "updatedAt": "2026-11-10T02:41:56.709Z",
-  "cursor": 544,
+  "updatedAt": "2026-11-10T10:24:01.778Z",
+  "cursor": 604,
   "proxies": [
     {
       "url": "http://176.111.37.5:39811",
-      "latencyMs": 782,
+      "latencyMs": 2752,
       "anon": "anonymous",
-      "checkedAt": "2026-11-10T02:41:56.709Z"
-    },
-    {
-      "url": "http://176.111.37.216:39811",
-      "latencyMs": 1789,
-      "anon": "anonymous",
-      "checkedAt": "2026-11-10T02:41:56.709Z"
+      "checkedAt": "2026-11-10T10:24:01.778Z"
     }
   ]
 }
