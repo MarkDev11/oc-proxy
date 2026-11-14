@@ -52,9 +52,11 @@ free tier to accept it:
   prompt. The proxy prepends the same inert block for fingerprint fidelity; it
   is not sufficient alone.
 * **Retry** — 429/5xx are retried with capped exponential backoff
-  (`UPSTREAM_MAX_WAIT_MS`, default 120s) because the free tier rate-limits
-  bursts and reports a misleading "until midnight" `retry-after`. A 429 with
-  `retry-after > 300s` is surfaced immediately instead of stalling.
+  (`UPSTREAM_MAX_WAIT_MS`, default 120s). A 429 is normally a composition or
+  fingerprint rejection with a misleading "until midnight" `retry-after`, not
+  a real quota. A 429 with `retry-after > 300s` gets one short retry with a
+  fresh session, then is surfaced instead of stalling; bisect tool names,
+  alias them, and replay.
 
 ## Documentation
 
@@ -147,6 +149,8 @@ the only public path).
   model is accepted (400 otherwise).
 * `POST /v1/messages` — Anthropic Messages facade (used by Claude-style
   clients).
+* `POST /v1/responses` — Codex CLI Responses facade; bridged to Chat
+  Completions upstream and translated back to Responses SSE.
 * `GET /api/health` — health check.
 * `GET /api/tunnel` — `{ "url": "https://<public-host>" }`.
 * `GET /` — live dashboard (model, speed, context fill, recent requests,
@@ -202,8 +206,9 @@ curl -N "$URL/v1/chat/completions" \
 
 * **`429 FreeUsageLimitError` on every request** — make sure the server runs
   under Bun (`npm run bg` logs `starting oc-proxy ... (bun)`), and that the
-  request reached the proxy (the `<env>` shim is injected automatically). The
-  free tier still has genuine rate limits; the proxy retries for up to
+  request reached the proxy (the `<env>` shim is injected automatically). This
+  429 is a composition/fingerprint rejection, not a quota: capture the request,
+  bisect tool names, alias the trigger, and replay. The proxy retries up to
   `UPSTREAM_MAX_WAIT_MS`.
 * **`cloudflared` missing** — only needed for the Quick Tunnel:
   `npm run install:tunnel`.
@@ -228,5 +233,6 @@ curl -N "$URL/v1/chat/completions" \
   `<env>` shim.
 * Always set `GATEWAY_API_KEY`. Funnel and Quick Tunnel URLs are public; without
   a key anyone who finds them can consume the free quota.
-* No proxy pool, no Vercel: one host, one upstream identity. If the upstream
-  rate-limits this host, requests wait and then fail.
+* No proxy pool, no Vercel: one host, one upstream identity. If upstream
+  rejects a request composition or fingerprint, inspect and fix the request
+  shape; do not treat the misleading 429 as exhausted quota.

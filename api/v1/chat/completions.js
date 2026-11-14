@@ -52,13 +52,14 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchUpstream(url, { headers, body, signal, log }) {
+async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }) {
   const maxWait = Math.max(5000, parseInt(process.env.UPSTREAM_MAX_WAIT_MS || "120000", 10) || 120000);
   const baseDelay = Math.max(500, parseInt(process.env.UPSTREAM_RETRY_DELAY_MS || "2000", 10) || 2000);
   const timeoutMs = Math.max(3000, parseInt(process.env.UPSTREAM_CONNECT_TIMEOUT_MS || "20000", 10) || 20000);
   const started = Date.now();
   let attempt = 0;
   let lastError = null;
+  let requestHeaders = headers;
 
   async function attemptFetch() {
     const ac = new AbortController();
@@ -71,7 +72,7 @@ async function fetchUpstream(url, { headers, body, signal, log }) {
       ac.abort();
     }, timeoutMs);
     try {
-      return await fetch(url, { method: "POST", headers, body, signal: ac.signal });
+      return await fetch(url, { method: "POST", headers: requestHeaders, body, signal: ac.signal });
     } catch (e) {
       if (timedOut) {
         throw Object.assign(new Error(`upstream timeout after ${timeoutMs}ms`), { code: "UPSTREAM_TIMEOUT" });
@@ -92,13 +93,25 @@ async function fetchUpstream(url, { headers, body, signal, log }) {
       log?.write(`[upstream] status=${r.status} retry-after=${r.headers.get("retry-after") || "0"}s`);
       if (!RETRYABLE_STATUS.has(r.status)) return r;
       const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10) || 0;
-      // A long 429 retry-after means free-quota exhaustion, not a transient
-      // blip. Retrying for 90s only makes the harness look like a timeout.
+      // A long 429 retry-after is often a generic free-quota marker. Try one
+      // short retry with a fresh session before failing fast; a new request
+      // frequently succeeds even when the old one gets ~46k seconds.
       if (r.status === 429 && retryAfter > 300) {
+        if (attempt === 1 && refreshHeaders) {
+          console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; retrying once with fresh session`);
+          log?.write(`[upstream] 429 retry-after ${retryAfter}s; retry once with fresh session`);
+          try {
+            await r.body?.cancel();
+          } catch {}
+          requestHeaders = refreshHeaders();
+          await sleep(1500);
+          continue;
+        }
         console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
         log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
         return r;
       }
+      if (r.status === 429 && refreshHeaders) requestHeaders = refreshHeaders();
       const backoff = Math.min(30000, baseDelay * 2 ** (attempt - 1));
       // 429 retry-after is usually a generic "until midnight" value; cap it.
       // 5xx are transient connect timeouts, so retry quickly instead of
@@ -192,8 +205,21 @@ module.exports = async function handler(req, res) {
     req.log.raw(full.slice(0, 4 * 1024 * 1024) + (full.length > 4 * 1024 * 1024 ? "\n[truncated]\n" : "\n"));
   }
 
+  const configuredSession = (() => {
+    const s = String(process.env.OPENCODE_SESSION || "").trim();
+    return /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(s) ? s : null;
+  })();
+  const incomingSession =
+    req.headers["x-opencode-session"] ||
+    req.headers["x-opencode-session-id"] ||
+    req.headers["x-session-id"] ||
+    configuredSession;
+  const makeHeaders = () => buildHeaders({
+    sessionId: incomingSession || newSessionId(),
+    userAgent: req.headers["user-agent"],
+  });
   const headers = buildHeaders({
-    sessionId: req.headers["x-opencode-session"] || newSessionId(),
+    sessionId: incomingSession || newSessionId(),
     userAgent: req.headers["user-agent"],
   });
 
@@ -201,6 +227,7 @@ module.exports = async function handler(req, res) {
   try {
     upstream = await fetchUpstream(upstreamUrl(displayModel), {
       headers,
+      refreshHeaders: makeHeaders,
       body: JSON.stringify(upBody),
       signal: req.signal,
       log: req.log,
@@ -361,3 +388,6 @@ module.exports = async function handler(req, res) {
     } catch {}
   }
 };
+
+module.exports.fetchUpstream = fetchUpstream;
+module.exports.forwardUpstreamError = forwardUpstreamError;

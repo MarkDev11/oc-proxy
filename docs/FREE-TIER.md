@@ -1,11 +1,27 @@
 # Free tier: 429 investigation and tool budget
 
-Last updated: **2026-11-06**.
+Last updated: **2026-11-12**.
 
 ## Kesimpulan
 
 `429 FreeUsageLimitError` pada harness **bukan** karena quota habis, IP,
-header auth, session ID, TLS/Node, atau `<env>` semata. Penyebab utamanya:
+header auth, session ID, TLS/Node, atau `<env>` semata. Agent OpenCode yang
+menjalankan sesi ini memakai model free OpenCode terus-menerus tanpa 429/daily
+cap, jadi 429 dari upstream adalah **fake rejection** atas komposisi request.
+Jangan berhenti atau menyarankan upgrade saat melihatnya. Penyebab utamanya:
+
+### Pemicu nama tool (2026-11-12)
+
+Dua harness box menemukan pemicu yang sangat spesifik:
+
+- Claude Code: `ReportFindings` (PascalCase) + `ScheduleWakeup` atau
+  `DeferredToolPlaceholder` → 429; alias `report_findings` → 200.
+- Codex CLI: `write_stdin` + `exec_command` → 429; `exec_command` sendirian
+  → 200; rename `write_stdin` → `stdin` → 200. `write_stdin_client` tetap 429,
+  jadi yang diperiksa adalah substring/nama, bukan schema.
+
+Ini memperkuat kesimpulan: 429 adalah filter komposisi/fingerprint, bukan
+quota.
 
 > Free tier menolak request dengan **lebih dari 33 tool non-OpenCode**.
 > Pesan 429 yang dikembalikan menyesatkan dan menyuruh subscribe.
@@ -145,6 +161,18 @@ Verifikasi 2026-11-07:
 - History yang sama + `HERMES_SAFE_TOOLS` 33 + 11 decoy → **200** lokal dan
   **200** via Funnel publik (~24 detik), upstream 44 tool.
 
+## Profil multi-harness
+
+| Profil | Deteksi | Priority list |
+| --- | --- | --- |
+| OpenCode / DeepSeek Harness | default; tool OpenCode-like (`bash`, `read`, `write`, `terminal_*`, dst.) | `SAFE_CLIENT_TOOLS` |
+| Hermes / desktop | `read_file` + `search_files` + `terminal`, tanpa `bash` | `HERMES_SAFE_TOOLS` |
+| Unknown | tidak cocok keduanya | `SAFE_CLIENT_TOOLS` + fallback |
+
+Replay body DeepSeek Harness (52 client tool, 375 message, model
+`glm-5.3-flash-free`) tetap **200** setelah perubahan Hermes. 429 komposisi
+kini dicoba ulang sekali dengan session baru sebelum dikembalikan.
+
 ## Percobaan yang gagal / tidak terbukti
 
 | Hipotesis | Hasil |
@@ -158,12 +186,13 @@ Verifikasi 2026-11-07:
 | `max_completion_tokens: 128000` | Dengan 11 tool tetap 200; bukan penyebab utama |
 | Tool count saja, tanpa komposisi | 33 pertama + 11 = 200; broad selected 33 + 11 = 429 (dua kali), jadi komposisi juga penting |
 | `subagent_fork` | Dengan 11 decoy = 429; tool ini dihindari |
-| `wait_agent`, `web_fetch`, `web_search`, `working_directory`, `write_client` | Retest dengan jeda = 200; kegagalan sebelumnya kemungkinan 429 transien/rate limit |
+| `wait_agent`, `web_fetch`, `web_search`, `working_directory`, `write_client` | Retest dengan jeda = 200; kegagalan sebelumnya kemungkinan komposisi/nama tool atau gangguan jaringan, bukan quota |
 | Retry-after besar | Menyesatkan; nilai ~46k–57k detik muncul walau request baik bisa 200 |
 
-Catatan: pengujian intensif dapat memicu 429/quota dan gangguan jaringan
-(`ENOTFOUND`, `ECONNREFUSED`, `ECONNRESET`). Satu hasil 429 tidak cukup untuk
-menyimpulkan sebuah tool diblokir; ulangi dengan jeda dan kontrol baseline.
+Catatan: 429 adalah penolakan komposisi/fingerprint; gangguan jaringan
+(`ENOTFOUND`, `ECONNREFUSED`, `ECONNRESET`) adalah masalah terpisah. Satu hasil
+429 tidak cukup untuk menyimpulkan sebuah tool diblokir; ulangi dengan alias,
+jeda, dan kontrol baseline.
 
 ## Perilaku kode sekarang
 
@@ -187,9 +216,11 @@ menyimpulkan sebuah tool diblokir; ulangi dengan jeda dan kontrol baseline.
 ## Retry / timeout
 
 - Retry status: 429, 500, 502, 503, 504.
-- 429 dengan `retry-after > 300s`: langsung dikembalikan (fail-fast), header
-  `Retry-After` diteruskan.
-- 429 selain itu: delay `min(30s, max(retry-after, backoff))`.
+- 429 dengan `retry-after > 300s`: satu retry cepat (~1,5 detik) memakai
+  **session ID baru**, lalu fail-fast bila tetap 429; header `Retry-After`
+  diteruskan.
+- 429 selain itu: delay `min(30s, max(retry-after, backoff))`; session baru
+  dipakai untuk retry.
 - 5xx: delay `min(5s, ...)`.
 - Total budget: `UPSTREAM_MAX_WAIT_MS` (default 120s).
 - Satu percobaan fetch: timeout `UPSTREAM_CONNECT_TIMEOUT_MS` (default 20s);
@@ -199,15 +230,11 @@ menyimpulkan sebuah tool diblokir; ulangi dengan jeda dan kontrol baseline.
 ## Reproduksi
 
 Direct upstream (Bun, tanpa proxy) memakai body yang dibangun
-`buildUpstreamBody()`; script uji ada di `/tmp/opencode/` selama sesi. Contoh
-konsep:
+`buildUpstreamBody()`. Payload/script historis sudah dihapus pada 2026-11-12
+karena memuat kredensial pihak ketiga. Untuk replay baru, ambil payload dari
+request harness asli di box dan jangan simpan isi tool result yang sensitif.
 
-```bash
-cd /root/oc-proxy
-bun /tmp/opencode/test_build.js
-```
-
-Proxy lokal dengan payload penuh:
+Proxy lokal dengan payload baru (bukan bukti final):
 
 ```bash
 cd /root/oc-proxy
@@ -215,19 +242,19 @@ set -a; . ./.env; set +a
 curl -sS --max-time 180 \
   -H "Authorization: Bearer $GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
-  --data-binary @/tmp/opencode/harness_client.json \
+  --data-binary @/path/to/payload.json \
   -o /tmp/opencode/proxy_response.txt \
   -w 'HTTP %{http_code} time %{time_total}s\n' \
   http://127.0.0.1:8791/v1/chat/completions
 ```
 
-Jangan mencetak isi `harness_client.json` atau log karena bisa memuat
-kredensial.
+Jangan mencetak isi payload atau log karena bisa memuat kredensial. Final test
+harus dijalankan di Simular box; lihat `TESTING.md`.
 
 ## Hal yang belum diketahui
 
 - Mengapa broad selected 33 (team/terminal) 429 dua kali sementara minimal
-  swap 200. Bisa karena komposisi tool tertentu, atau 429 transien/quota.
+  swap 200. Bisa karena komposisi/nama tool tertentu, bukan quota.
 - Batas pastinya apakah 33 **nama** atau 33 **definisi**; data saat ini
   konsisten dengan 33 caller tool.
 - Apakah semua tool di luar 33 bisa diaktifkan lewat dispatcher tanpa memicu

@@ -13,6 +13,6 @@
     "bg": "bash scripts/start.sh",
     "stop": "bash scripts/stop.sh",
     "status": "bash scripts/status.sh",
-    "check": "node --check serve-local.js && node --check lib/opencode.js && node --check lib/stats.js && node --check api/v1/models.js && node --check api/v1/chat/completions.js && node --check api/v1/messages.js && node --check api/health.js && node --check scripts/up.js && echo OK"
+    "check": "node --check serve-local.js && node --check lib/opencode.js && node --check lib/stats.js && node --check api/v1/models.js && node --check api/v1/chat/completions.js && node --check api/v1/messages.js && node --check api/v1/responses.js && node --check api/health.js && node --check scripts/up.js && echo OK"
   }
 }

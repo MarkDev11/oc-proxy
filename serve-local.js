@@ -15,6 +15,7 @@ const health = require('./api/health');
 const models = require('./api/v1/models');
 const completions = require('./api/v1/chat/completions');
 const messages = require('./api/v1/messages');
+const responses = require('./api/v1/responses');
 const stats = require('./lib/stats');
 
 const PORT = parseInt(process.env.PORT || '8791', 10);
@@ -226,6 +227,8 @@ const server = http.createServer((req, res) => {
         return await completions(r, w);
       if (u.pathname === '/api/v1/messages' || u.pathname === '/v1/messages')
         return await messages(r, w);
+      if (u.pathname === '/api/v1/responses' || u.pathname === '/v1/responses')
+        return await responses(r, w);
       if (req.method === 'OPTIONS') { res.writeHead(200); return res.end(); }
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'not found' }));

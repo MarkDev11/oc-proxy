@@ -1,6 +1,6 @@
 # oc-proxy documentation
 
-Internal documentation for this deployment. Last updated: **2026-11-06**.
+Internal documentation for this deployment. Last updated: **2026-11-12**.
 
 Dokumen ini dibuat karena konteks sesi AI terbatas dan sering terkena
 compaction. Baca file di folder ini sebelum melanjutkan pekerjaan dari sesi
@@ -20,7 +20,7 @@ baru.
 | Gateway auth | `Authorization: Bearer <GATEWAY_API_KEY>` untuk semua `/v1/*` |
 | Free models | `beam-free`, `flint-40b-free`, `mimo-v2.6-flash-free`, `nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free`, `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`, `pulse-alpha-free`, `crouton-alpha-free` (+ alias `oc/`) |
 | Repo | `/root/oc-proxy`, branch `reverse-oc-proxy` |
-| Last commit | `b42e230` (perubahan terbaru belum di-commit) |
+| Last commit | `ef21847` (bridge `/v1/responses` + fix harness belum di-commit) |
 
 ## Status singkat
 
@@ -31,31 +31,37 @@ baru.
   **44 tool total**.
 - Request harness penuh (payload 52 tool, 375 message) melalui proxy lokal
   sekarang **HTTP 200**, upstream melihat **44 tool**, 377 input item.
-- Hermes/desktop agent memakai `HERMES_SAFE_TOOLS` 33; request Hermes asli
-  yang sebelumnya 429 sekarang **200** lewat lokal dan Funnel publik.
+- Claude Code 2.1.318 dan Codex CLI 0.166.0 sudah lulus smoke + task
+  kompleks di Simular box. Codex memakai bridge `/v1/responses`; pemicu 429
+  `ReportFindings` dan `write_stdin` sudah dialias.
 - Payload penuh lewat **Tailscale Funnel HTTP/2** sempat abort setelah 244
   byte; versi `--http1.1` dan replay Hermes via Node `fetch` **200**. Detail
   di `STATUS.md`.
+- **429 bukan quota.** Ini penolakan komposisi/fingerprint; bisect nama tool,
+  alias, replay. Jangan berhenti atau menyarankan upgrade.
 - Ada risiko keamanan: payload harness dan log request (jika logging
   diaktifkan) dapat memuat kredensial pihak ketiga di dalam isi
-  message/tool result. Jangan membagikan file
-  `/tmp/opencode/harness_client.json`, isi `logs/requests/`, atau payload asli.
-  Redaksi log belum menangkap semua bentuk API key di dalam konten.
+  message/tool result. Payload harness lokal sudah dihapus 2026-11-12. Jangan
+  membagikan payload baru, isi `logs/requests/`, atau payload asli. Redaksi log
+  belum menangkap semua bentuk API key di dalam konten. Final test ada di
+  Simular box; lihat `TESTING.md`.
 
 ## Urutan baca untuk sesi baru
 
 1. `STATUS.md` — kondisi terkini, yang sudah jalan, yang gagal, next action.
-2. `FREE-TIER.md` — hasil investigasi 429, aturan 33+11, header/fingerprint.
-3. `HARNESS.md` — detail harness, 503, tool schema, tes reproduksi.
-4. `OPERATIONS.md` — runbook start/stop/log/troubleshooting/Tailscale.
-5. `ARCHITECTURE.md` — alur request dan file utama.
-6. `HISTORY.md` — kronologi pekerjaan dan percobaan yang gagal.
+2. `TESTING.md` — objective, aturan box-only, cleanup lokal, inventory/matrix harness.
+3. `FREE-TIER.md` — hasil investigasi 429, aturan 33+11, header/fingerprint.
+4. `HARNESS.md` — detail harness, 503, tool schema, tes reproduksi.
+5. `OPERATIONS.md` — runbook start/stop/log/troubleshooting/Tailscale.
+6. `ARCHITECTURE.md` — alur request dan file utama.
+7. `HISTORY.md` — kronologi pekerjaan dan percobaan yang gagal.
 
 ## Dokumen
 
 | File | Isi |
 | --- | --- |
 | `STATUS.md` | Status operasional, test matrix, known issues, next steps |
+| `TESTING.md` | Objective, aturan box-only, cleanup lokal, inventory/matrix harness |
 | `ARCHITECTURE.md` | Arsitektur, komponen, endpoint, env, alur request |
 | `FREE-TIER.md` | Investigasi 429, tool budget 33+11, header, replay |
 | `HARNESS.md` | DeepSeek Harness, 503, schema tool, security |

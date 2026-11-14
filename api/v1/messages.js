@@ -270,12 +270,13 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function fetchUpstream(url, { headers, body, signal, log }) {
+async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }) {
   const maxWait = Math.max(5000, parseInt(process.env.UPSTREAM_MAX_WAIT_MS || "120000", 10) || 120000);
   const baseDelay = Math.max(500, parseInt(process.env.UPSTREAM_RETRY_DELAY_MS || "2000", 10) || 2000);
   const timeoutMs = Math.max(3000, parseInt(process.env.UPSTREAM_CONNECT_TIMEOUT_MS || "20000", 10) || 20000);
   const started = Date.now();
   let attempt = 0;
+  let requestHeaders = headers;
 
   async function attemptFetch() {
     const ac = new AbortController();
@@ -288,7 +289,7 @@ async function fetchUpstream(url, { headers, body, signal, log }) {
       ac.abort();
     }, timeoutMs);
     try {
-      return await fetch(url, { method: "POST", headers, body, signal: ac.signal });
+      return await fetch(url, { method: "POST", headers: requestHeaders, body, signal: ac.signal });
     } catch (e) {
       if (timedOut) {
         throw Object.assign(new Error(`upstream timeout after ${timeoutMs}ms`), { code: "UPSTREAM_TIMEOUT" });
@@ -310,10 +311,21 @@ async function fetchUpstream(url, { headers, body, signal, log }) {
       if (!RETRYABLE_STATUS.has(r.status)) return r;
       const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10) || 0;
       if (r.status === 429 && retryAfter > 300) {
+        if (attempt === 1 && refreshHeaders) {
+          console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; retrying once with fresh session`);
+          log?.write(`[upstream] 429 retry-after ${retryAfter}s; retry once with fresh session`);
+          try {
+            await r.body?.cancel();
+          } catch {}
+          requestHeaders = refreshHeaders();
+          await sleep(1500);
+          continue;
+        }
         console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
         log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
         return r;
       }
+      if (r.status === 429 && refreshHeaders) requestHeaders = refreshHeaders();
       const backoff = Math.min(30000, baseDelay * 2 ** (attempt - 1));
       const delay =
         r.status === 429
@@ -388,6 +400,10 @@ module.exports = async function handler(req, res) {
     req.log.raw(full.slice(0, 4 * 1024 * 1024) + (full.length > 4 * 1024 * 1024 ? "\n[truncated]\n" : "\n"));
   }
 
+  const makeHeaders = () => buildHeaders({
+    sessionId: newSessionId(),
+    userAgent: req.headers["user-agent"],
+  });
   const headers = buildHeaders({
     sessionId: req.headers["x-opencode-session"] || newSessionId(),
     userAgent: req.headers["user-agent"],
@@ -397,6 +413,7 @@ module.exports = async function handler(req, res) {
   try {
     upstream = await fetchUpstream(upstreamUrl(chat.model), {
       headers,
+      refreshHeaders: makeHeaders,
       body: JSON.stringify(upBody),
       signal: req.signal,
       log: req.log,

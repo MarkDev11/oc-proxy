@@ -163,9 +163,9 @@ git diff --stat
 git log --oneline -5
 ```
 
-Branch saat ini `reverse-oc-proxy`, commit terakhir `b42e230`. Perubahan
-logging/fail-fast/timeout/tool cap/docs belum di-commit. Jangan commit/push
-tanpa instruksi eksplisit.
+Branch saat ini `reverse-oc-proxy`. Cap, logging opt-in, docs, dan Hermes-safe
+cap sudah di-push (`ef21847`). Retry session baru masih di working tree; jangan
+commit/push tanpa instruksi eksplisit.
 
 ## Setelah reboot / sesi baru
 

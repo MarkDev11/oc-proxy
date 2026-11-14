@@ -1,6 +1,12 @@
 # DeepSeek Harness notes
 
-Last updated: **2026-11-06**.
+Last updated: **2026-11-12**.
+
+> Catatan historis. Artefak uji lokal untuk DSH/OpenClaw/Hermes sudah dihapus
+> pada 2026-11-12. Final test sekarang dilakukan di Simular box; lihat
+> [`TESTING.md`](TESTING.md). Pelajaran lama yang menyebut 429 sebagai
+> "quota/rate limit" sudah **tidak berlaku**: 429 di sini adalah penolakan
+> komposisi/fingerprint. Jangan berhenti atau menyarankan upgrade.
 
 ## Identitas request
 
@@ -106,9 +112,10 @@ untuk file; `web_fetch`/`web_search` untuk web.
 | `working_directory` + 11 | 200 (retest) |
 | `write_client` + 11 | 200 (retest) |
 
-Kesimpulan: `subagent_fork` dihindari; kegagalan later tools sebelumnya
-kemungkinan 429 transien/rate limit. Uji intensif bisa memicu quota; selalu
-sertakan kontrol baseline dan jeda.
+Kesimpulan: `subagent_fork` dihindari karena memicu 429 komposisi. Kegagalan
+later tools sebelumnya bukan quota; audit nama tool dan ulangi dengan baseline.
+Codex dan Claude Code menunjukkan pemicu bisa berupa **nama tool spesifik**
+(`write_stdin`, `ReportFindings`) yang perlu dialias.
 
 ## 503 `fetch connect timeout (reset after 23s)`
 
@@ -131,43 +138,35 @@ event `[upstream] attempt`, `status`, `timeout`, serta `CLIENT RESPONSE`.
 
 ## Reproduksi
 
-File uji sementara ada di `/tmp/opencode/` (bukan bagian repo):
+Payload historis (`harness_client.json`, `harness_upstream.json`, payload
+agentic, dan eksperimen tool-cap) sudah **dihapus** dari `/tmp/opencode/` pada
+2026-11-12 karena memuat tool result dengan API key pihak ketiga. Jangan
+membuat ulang payload yang menyimpan secret.
 
-- `harness_upstream.json` — body upstream 63 tool/377 message dari log lama.
-- `harness_client.json` — payload harness 52 tool/375 message.
-- `test_build.js` — build body + kirim langsung ke upstream.
-- `test_baseline33.js` — baseline 33 pertama.
-- `test_set.js` — kirim daftar tool tertentu.
-- `replay_full_cap.js`, `replay_maxcount.js`, `replay_decoy_subset.js`,
-  `replay_core5.js`, `replay_later_tools.js` — eksperimen batas tool.
-- `capture-server.js`, `capture-cfg/` — capture OpenCode asli.
-- `capture-requests.jsonl` — request OpenCode asli.
-
-Perintah:
+Uji proxy lokal (bukan bukti final) dapat memakai payload baru dari request
+harness asli:
 
 ```bash
 cd /root/oc-proxy
-bun /tmp/opencode/test_build.js
-```
-
-Proxy lokal:
-
-```bash
 set -a; . ./.env; set +a
 curl -sS --max-time 180 \
   -H "Authorization: Bearer $GATEWAY_API_KEY" \
   -H "Content-Type: application/json" \
-  --data-binary @/tmp/opencode/harness_client.json \
+  --data-binary @/path/to/payload.json \
   -o /tmp/opencode/proxy_response.txt \
   -w 'HTTP %{http_code} %{time_total}s\n' \
   http://127.0.0.1:8791/v1/chat/completions
 ```
 
+Final test harus dijalankan di Simular box. Lihat `TESTING.md` untuk inventory,
+matrix, dan next steps.
+
 ## Security warning
 
-`/tmp/opencode/harness_client.json` dan log request bisa memuat **API key
-pihak ketiga** di dalam isi tool result (contoh: konfigurasi plugin dengan
-`apiKey`). Redaksi proxy belum menangkap semua format tersebut.
+Payload harness lama dan log request bisa memuat **API key pihak ketiga** di
+dalam isi tool result (contoh: konfigurasi plugin dengan `apiKey`). Redaksi
+proxy belum menangkap semua format tersebut. Payload lama sudah dihapus;
+jangan menyimpan payload baru yang memuat secret.
 
 Tindakan:
 
