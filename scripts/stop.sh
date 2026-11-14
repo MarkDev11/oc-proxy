@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [[ -f run/warp-rotate.pid ]]; then
+  bash scripts/warp_rotate.sh stop >/dev/null 2>&1 || true
+fi
+
 if [[ ! -f run/supervisor.pid ]]; then
   echo "not running (no run/supervisor.pid)"
   exit 0

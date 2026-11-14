@@ -32,6 +32,9 @@ fi
 
 if [[ -f run/supervisor.pid ]] && kill -0 "$(cat run/supervisor.pid)" 2>/dev/null; then
   echo "already running (pid $(cat run/supervisor.pid))"
+  if [[ "${WARP_ROTATE:-0}" == "1" ]]; then
+    bash scripts/warp_rotate.sh start >> logs/up.log 2>&1 || true
+  fi
   bash scripts/status.sh || true
   exit 0
 fi
@@ -51,6 +54,10 @@ if ! curl -fsS "http://${HOST}:${PORT}/api/health" >/dev/null 2>&1; then
   exit 1
 fi
 echo "local: http://${HOST}:${PORT}"
+
+if [[ "${WARP_ROTATE:-0}" == "1" ]]; then
+  bash scripts/warp_rotate.sh start >> logs/up.log 2>&1 || true
+fi
 
 if [[ "$TUNNEL_DISABLED" == "1" ]]; then
   if [[ -n "${PUBLIC_URL:-}" ]]; then
