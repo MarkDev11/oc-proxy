@@ -1,12 +1,5 @@
 {
-  "updatedAt": "2026-11-14T23:53:54.639Z",
-  "cursor": 1684,
-  "proxies": [
-    {
-      "url": "http://38.226.242.61:8080",
-      "latencyMs": 3589,
-      "anon": "anonymous",
-      "checkedAt": "2026-11-14T23:53:54.639Z"
-    }
-  ]
+  "updatedAt": "2026-11-15T03:28:11.509Z",
+  "cursor": 1744,
+  "proxies": []
 }
