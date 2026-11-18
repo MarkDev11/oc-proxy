@@ -1,5 +1,12 @@
 {
-  "updatedAt": "2026-11-17T19:29:08.270Z",
-  "cursor": 2284,
-  "proxies": []
+  "updatedAt": "2026-11-18T01:45:49.290Z",
+  "cursor": 2344,
+  "proxies": [
+    {
+      "url": "http://198.199.86.11:3128",
+      "latencyMs": 370,
+      "anon": "anonymous",
+      "checkedAt": "2026-11-18T01:45:49.290Z"
+    }
+  ]
 }
