@@ -45,6 +45,7 @@ label{font-size:12px;color:var(--mut);display:block;margin:10px 0 4px}
 input,select,textarea{width:100%;background:#0d1219;border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:9px 11px;font-size:13px}
 textarea{min-height:90px;resize:vertical}
 .btn{background:var(--grn);border:0;color:#06281c;font-weight:700;border-radius:10px;padding:10px 18px;cursor:pointer;margin-top:12px;font-size:14px}
+.btn.sec{background:#1c2534;color:var(--txt);border:1px solid var(--line);font-weight:600}
 .btn:disabled{opacity:.5;cursor:wait}
 pre.out{background:#0d1219;border:1px solid var(--line);border-radius:10px;padding:12px;white-space:pre-wrap;min-height:120px;margin:12px 0 0;font-size:13px}
 .frm{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
@@ -110,10 +111,29 @@ ul{padding-left:18px}li{margin:6px 0}
 
 <!-- CONSOLE -->
 <div id="tab-con" hidden>
+<div class="card"><h3>Gateway key <span class="sub" id="keyBadge">not set</span></h3>
+<div class="sub">Used by the WARP panel and the request tester. Kept in memory only, never stored.</div>
+<input id="cKey" type="password" placeholder="Bearer key (GATEWAY_API_KEY)" autocomplete="off" style="margin-top:8px">
+</div>
+<div class="card"><h3>WARP egress <span class="sub" id="warpBadge">enter API key</span></h3>
+<div class="row">
+<div><span class="big" id="warpIp">–</span><div class="sm" id="warpPfx">prefix –</div></div>
+<div class="sm" id="warpMeta">rotation: – · cooling: – · usque: – · relay: –</div>
+</div>
+<div class="sm" id="warpUp" style="margin-top:6px">upstream: –</div>
+<div class="sm" id="warpVerified">verified prefix –</div>
+<label class="chk" style="margin-top:10px"><input id="warpUpstream" type="checkbox" onchange="warpUpstreamToggle()"> route upstream through WARP</label>
+<div class="sm" id="warpUpstreamNote">applies to the next upstream request</div>
+<div class="row" style="margin-top:10px;gap:8px">
+<button class="btn" id="warpRotate" onclick="warpAction('rotate')">Rotate now</button>
+<button class="btn sec" id="warpStart" onclick="warpAction('start')">Start WARP</button>
+<button class="btn sec" id="warpStop" onclick="warpAction('stop')">Stop WARP</button>
+</div>
+<pre class="out" id="warpLog" style="min-height:70px;max-height:150px;overflow:auto">no rotation log yet</pre>
+</div>
 <div class="card"><h3>Try a request</h3><div class="sub">Sent to <code>/v1/chat/completions</code> on this host. Nothing is stored — the result shows here only.</div>
 <div class="frm"><div>
 <label>Model</label><select id="cMod"><option>loading…</option></select>
-<label>API key (kept in memory only, never stored)</label><input id="cKey" type="password" placeholder="Bearer key (GATEWAY_API_KEY)" autocomplete="off">
 </div><div>
 <label>Stream</label><div class="chk"><input id="cStream" type="checkbox" checked> stream response</div>
 <label>Timeout (s)</label><input id="cTo" type="number" value="90" min="10" max="120">
@@ -148,7 +168,7 @@ const esc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
 const fm=n=>n==null||isNaN(n)?"–":Number(n).toLocaleString("en-US",{maximumFractionDigits:1});
 const cap=s=>s?String(s).charAt(0).toUpperCase()+String(s).slice(1):"Idle";
 
-function tab(n){for(const t of["mon","con","about"]){$("tab-"+t).hidden=t!==n;$("t-"+t).className=t===n?"on":""}}
+function tab(n){for(const t of["mon","con","about"]){$("tab-"+t).hidden=t!==n;$("t-"+t).className=t===n?"on":""}if(n==="con")warpStatus();}
 function pill(mode,tx){const p=$("pill");p.className="pill"+(mode==="gen"?" gen":mode==="err"?" err":"");$("pillTx").textContent=tx;
 $("dGen").style.background=mode==="gen"?"var(--grn)":"";$("dErr").style.background=mode==="err"?"var(--red)":"";$("dIdle").style.background=mode!=="gen"&&mode!=="err"?"var(--grn)":"";}
 
@@ -200,20 +220,86 @@ async function poll(){
  setTimeout(poll,2000);
 }
 
+let warpTimer=null,keyRequired=false;
+function warpKey(){return (($("cKey")&&$("cKey").value)||"").trim()}
+function setKeyBadge(text,bad){const b=$("keyBadge");if(b){b.textContent=text;b.style.color=bad?"var(--red)":"var(--mut)"}}
+async function warpStatus(){
+ if(!$("warpBadge"))return;
+ const key=warpKey();
+ if(!key){
+  $("warpBadge").textContent="enter API key";$("warpIp").textContent="–";$("warpPfx").textContent="prefix –";
+  $("warpMeta").textContent="rotation: – · cooling: – · usque: – · relay: –";
+  $("warpUp").textContent="upstream: –";$("warpVerified").textContent="verified prefix –";
+  clearTimeout(warpTimer);warpTimer=setTimeout(warpStatus,4000);return;
+ }
+ if($("tab-con").hidden){clearTimeout(warpTimer);warpTimer=setTimeout(warpStatus,5000);return}
+ try{
+  const r=await fetch("/api/warp",{cache:"no-store",headers:{Authorization:"Bearer "+key}});
+  if(r.status===401){$("warpBadge").textContent="invalid API key";clearTimeout(warpTimer);warpTimer=setTimeout(warpStatus,5000);return}
+  if(!r.ok)throw new Error("HTTP "+r.status);
+  const j=await r.json();
+  const eng=j.engine||"wireproxy";
+  const egressUp=eng==="wireproxy"?j.wireproxy:(j.usque&&j.relay);
+  $("warpBadge").textContent=j.rotating?"● rotating…":(egressUp?"● WARP egress up":"○ WARP egress down");
+  $("warpIp").textContent=j.ip||"–";
+  $("warpPfx").textContent=(j.prefix?("prefix "+j.prefix):"prefix –");
+  $("warpMeta").textContent="engine: "+eng+" · rotation: "+(j.running?"running":"stopped")+" · cooling: "+(j.cooling||0)+" · backoff: "+(j.backoff?j.backoff+"s":"–")+" · wireproxy: "+(j.wireproxy?"up":"down")+" · usque: "+(j.usque?"up":"down")+" · relay: "+(j.relay?"up":"down");
+  $("warpUp").textContent="upstream: "+(j.upstreamProxy?("WARP via "+j.upstreamProxy):"direct");
+  $("warpVerified").textContent="verified prefix "+(j.verifiedPrefix||"–")+(j.verifiedIp?(" · "+j.verifiedIp):"");
+  const cb=$("warpUpstream");
+  if(cb&&document.activeElement!==cb)cb.checked=Boolean(j.upstreamProxy);
+  if(cb)cb.disabled=Boolean(j.upstreamLocked);
+  $("warpUpstreamNote").textContent=j.upstreamLocked?"locked by UPSTREAM_PROXY env":"applies to the next upstream request";
+  $("warpLog").textContent=(j.log&&j.log.length)?j.log.join("\n"):"no rotation log yet";
+ }catch(e){$("warpBadge").textContent="status unavailable"}
+ clearTimeout(warpTimer);warpTimer=setTimeout(warpStatus,3000);
+}
+async function warpAction(action){
+ const key=warpKey();
+ if(!key){$("warpBadge").textContent="enter API key";return}
+ const btn=$("warp"+action.charAt(0).toUpperCase()+action.slice(1));
+ if(btn)btn.disabled=true;
+ try{
+  const r=await fetch("/api/warp/"+action,{method:"POST",headers:{Authorization:"Bearer "+key}});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error((j.error&&j.error.message)||("HTTP "+r.status));
+  $("warpBadge").textContent=action+" started…";
+  setTimeout(warpStatus,700);
+ }catch(e){$("warpBadge").textContent="action failed: "+e.message}
+ if(btn)setTimeout(()=>btn.disabled=false,1500);
+}
+async function warpUpstreamToggle(){
+ const key=warpKey();
+ if(!key){$("warpBadge").textContent="enter API key";return}
+ const enabled=$("warpUpstream").checked;
+ try{
+  const r=await fetch("/api/warp/upstream",{method:"POST",headers:{"Content-Type":"application/json",Authorization:"Bearer "+key},body:JSON.stringify({enabled})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error((j.error&&j.error.message)||("HTTP "+r.status));
+  $("warpBadge").textContent=enabled?"upstream via WARP":"upstream direct";
+  setTimeout(warpStatus,500);
+ }catch(e){
+  $("warpBadge").textContent="toggle failed: "+e.message;
+  $("warpUpstream").checked=!enabled;
+ }
+}
 async function meta(){
- const key=(($("cKey")&&$("cKey").value)||"").trim();
+ const key=warpKey();
  try{const r=await fetch("/v1/models",{cache:"no-store",headers:key?{Authorization:"Bearer "+key}:{}});
- if(r.status===401){$("cMod").innerHTML="<option>enter API key to load models</option>";return}
+ if(r.status===401){keyRequired=true;setKeyBadge(key?"invalid":"required",true);$("cMod").innerHTML="<option>enter API key to load models</option>";return}
+ if(!r.ok)throw new Error("HTTP "+r.status);
+ keyRequired=false;setKeyBadge(key?"valid":"not required",false);
  const j=await r.json();
  const ids=(j.data||[]).map(m=>m.id);const bare=ids.filter(i=>!i.startsWith("oc/"));
  const sel=$("cMod");sel.innerHTML=bare.map(id=>"<option>"+esc(id)+"</option>").join("");
  const fav=bare.find(i=>i.includes("deepseek-v4.1"))||bare[0];if(fav)sel.value=fav;
- }catch(e){$("cMod").innerHTML="<option>models unreachable</option>"}
+ }catch(e){setKeyBadge("unreachable",true);$("cMod").innerHTML="<option>models unreachable</option>"}
 }
 $("cMod")&&$("cMod").addEventListener("change",()=>{});
-$("cKey")&&$("cKey").addEventListener("change",meta);
+$("cKey")&&$("cKey").addEventListener("change",()=>{meta();warpStatus()});
 async function send(){
- const model=$("cMod").value,prompt=$("cPrompt").value,key=$("cKey").value.trim();
+ const model=$("cMod").value,prompt=$("cPrompt").value,key=warpKey();
+ if(keyRequired&&!key){$("cStat").textContent="enter the gateway key above";$("cOut").textContent="";return}
  const stream=$("cStream").checked,tmo=Math.max(10,Math.min(120,+($("cTo").value||90)))*1000;
  const btn=$("cSend");btn.disabled=true;$("cStat").textContent="sending…";$("cOut").textContent="";
  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),tmo);
@@ -257,7 +343,7 @@ async function send(){
  clearTimeout(to);btn.disabled=false;
 }
 document.addEventListener("visibilitychange",()=>{if(!document.hidden)poll()});
-(function init(){meta();poll();pollTunnel();})();
+(function init(){meta();poll();pollTunnel();warpStatus();})();
 </script>
 </body>
 </html>

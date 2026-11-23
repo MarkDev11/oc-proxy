@@ -1,6 +1,47 @@
 # Status
 
-Last updated: **2026-11-12** (box complex tests: OpenClaw 2026.3.24, DSH, Hermes).
+Last updated: **2026-11-23** (Tailscale Funnel + WARP wireproxy + 10 free model 200).
+
+## 2026-11-23 — public endpoint: Tailscale Funnel
+
+`TUNNEL_DISABLED=1`; Cloudflare Quick Tunnel dimatikan. Publik lewat
+**Tailscale Funnel** dengan hostname stabil:
+
+```text
+https://oc-proxy.tail750b1b.ts.net  ->  http://127.0.0.1:8791
+```
+
+`tailscaled` berjalan userspace (`--tun=userspace-networking`, tanpa
+`/dev/net/tun`) dengan state di `run/tailscale/`.
+`scripts/tailscale.sh ensure` menyalakan daemon lalu
+`tailscale funnel --bg 8791`, dan dipanggil `scripts/start.sh` saat
+`PUBLIC_URL` berupa `*.ts.net`. Serve config tersimpan di state tailscaled,
+jadi Funnel tetap aktif setelah daemon restart. Auth tetap wajib: `/v1/*` dan
+`/api/warp*` membalas `401` tanpa `Authorization: Bearer $GATEWAY_API_KEY`;
+10 model free membalas `200` lewat URL publik, non-stream maupun stream.
+
+Catatan sandbox: `tailscale up` membutuhkan operator. Karena proot memetakan
+uid, `run/tailscale/bin/sudo` (shim) dipakai tailscaled agar `PermitWrite`
+aktif dan `tailscale up --operator=container` diterima.
+
+## 2026-11-23 — wireproxy egress
+
+Egress default sekarang **wireproxy** (`127.0.0.1:28091`), bukan usque. Device
+WARP dimiliki oc-proxy (`run/warp-device.json`) dan dirotasi oleh
+`scripts/warp_register.js`; `scripts/start.sh` memverifikasi egress saat startup
+dan merotasi bila model belum `200`. Rotasi hanya diterima jika **semua** model
+di `WARP_VERIFY_MODELS` (default: `deepseek`, `mimo`, `tidepool`) membalas
+`200`; bila semua percobaan gagal, device + config lama dipulihkan supaya
+tunnel tidak tertinggal di alamat yang sudah kena `FreeUsageLimitError`. Saat
+request menerima `429 FreeUsageLimitError`, output ditahan: proxy merotasi WARP
+dan mengulang request (rotasi dipakai bersama oleh request concurrent, tanpa
+cooldown, jeda 5 detik antar putaran yang gagal, maksimum 6 putaran). Kalau
+semua putaran gagal, baru `429` dikembalikan. Semua
+10 model free lolos matrix non-stream dan streaming: `mimo-v2.6-flash-free`,
+`deepseek-v4.1-flash-free`, `iceman-free`, `beam-free`, `flint-40b-free`,
+`nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free`, `hy4-flash-free`,
+`tidepool-alpha-free`, dan `jev-1.13-free` (System One). Detail:
+[`WARP.md`](WARP.md).
 
 ## Ringkasan
 

@@ -16,9 +16,10 @@ baru.
 | Upstream | `https://opencode.ai/inference/openai/v1` |
 | Tunnel | Tailscale Funnel, publik |
 | Cloudflare Quick Tunnel | Dimatikan (`TUNNEL_DISABLED=1`) |
+| WARP egress | wireproxy userspace WireGuard, HTTP proxy `127.0.0.1:28091`, rotasi device `/64`; usque `28090` legacy |
 | Request logging | **Off by default**; aktifkan dengan `REQUEST_LOG_ENABLED=1` |
 | Gateway auth | `Authorization: Bearer <GATEWAY_API_KEY>` untuk semua `/v1/*` |
-| Free models | `beam-free`, `flint-40b-free`, `mimo-v2.6-flash-free`, `nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free`, `deepseek-v4.1-flash-free`, `glm-5.3-flash-free`, `pulse-alpha-free`, `crouton-alpha-free` (+ alias `oc/`) |
+| Free models | `mimo-v2.6-flash-free`, `deepseek-v4.1-flash-free`, `iceman-free`, `beam-free`, `flint-40b-free`, `nemotron-3.5-super-vl-free`, `nemotron-3.5-lightning-free`, `hy4-flash-free`, `tidepool-alpha-free`, `jev-1.13-free` (+ alias `oc/`) |
 | Repo | `/root/oc-proxy`, branch `reverse-oc-proxy` |
 | Last commit | `ef21847` (bridge `/v1/responses` + fix harness belum di-commit) |
 
@@ -53,8 +54,9 @@ baru.
 3. `FREE-TIER.md` — hasil investigasi 429, aturan 33+11, header/fingerprint.
 4. `HARNESS.md` — detail harness, 503, tool schema, tes reproduksi.
 5. `OPERATIONS.md` — runbook start/stop/log/troubleshooting/Tailscale.
-6. `ARCHITECTURE.md` — alur request dan file utama.
-7. `HISTORY.md` — kronologi pekerjaan dan percobaan yang gagal.
+6. `WARP.md` — rotasi egress WARP (wireproxy default, usque legacy), dashboard Console, env.
+7. `ARCHITECTURE.md` — alur request dan file utama.
+8. `HISTORY.md` — kronologi pekerjaan dan percobaan yang gagal.
 
 ## Dokumen
 
@@ -66,6 +68,7 @@ baru.
 | `FREE-TIER.md` | Investigasi 429, tool budget 33+11, header, replay |
 | `HARNESS.md` | DeepSeek Harness, 503, schema tool, security |
 | `OPERATIONS.md` | Runbook, log, Tailscale, troubleshooting, security |
+| `WARP.md` | Rotasi egress WARP (wireproxy/usque), dashboard Console, env |
 | `HISTORY.md` | Timeline perubahan dan kegagalan |
 
 ## Aturan penting

@@ -35,6 +35,7 @@ sekarang **dimatikan** dengan `TUNNEL_DISABLED=1`.
 | `scripts/up.js` | supervisor proses server + tunnel opsional |
 | `scripts/start.sh` | start background, health wait, tulis URL |
 | `scripts/stop.sh`, `scripts/status.sh` | stop/status |
+| `scripts/tailscale.sh` | tailscaled userspace + Funnel (`ensure/status/url`) |
 | `run/` | PID supervisor, `tunnel-url.txt` (gitignored) |
 | `logs/` | `up.log`, `oc-proxy.log`, `requests/` jika logging aktif (gitignored) |
 | `.env` | konfigurasi dan secret (gitignored, jangan dibaca/dicetak) |
@@ -110,7 +111,9 @@ gateway key; server hanya listen di `127.0.0.1`, akses publik lewat tunnel.
 - **Wajib Bun** untuk request ke upstream: `scripts/up.js` menjalankan
   `bun serve-local.js`; health melaporkan `runtime: bun/...`.
 - **Tailscale Funnel**: `tailscaled` userspace, tanpa TUN/root. Funnel publik
-  port 8791. `PUBLIC_URL` ditulis ke `run/tunnel-url.txt`.
+  port 8791. `PUBLIC_URL` ditulis ke `run/tunnel-url.txt`. Daemon + serve
+  config dikelola `scripts/tailscale.sh` dan dinyalakan `start.sh` saat
+  `PUBLIC_URL` berupa `*.ts.net`.
 - **Cloudflare Quick Tunnel**: opsional, hanya jika `TUNNEL_DISABLED != 1`.
   Binary `bin/cloudflared` (gitignored). Tidak dipakai pada deployment ini.
 

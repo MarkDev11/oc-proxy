@@ -81,42 +81,36 @@ Tidak ada rotasi otomatis. Setelah selesai debugging, set
 
 ## Tailscale Funnel
 
-Tailscale berjalan manual di userspace. Binary:
+Tailscale berjalan di userspace, dikelola oleh `scripts/tailscale.sh`. Binary
+dan state ada di dalam repo, jadi tidak butuh root atau `/dev/net/tun`:
 
-- `/usr/local/bin/tailscale`
-- `/usr/local/bin/tailscaled`
-- socket `/var/run/tailscale/tailscaled.sock`
-- state `/var/lib/tailscale/tailscaled.state`
-- SOCKS/HTTP proxy `127.0.0.1:1055`
-
-Contoh start (sesuaikan hostname/tailnet):
+- `bin/tailscale`, `bin/tailscaled`
+- socket `run/tailscale/socket`
+- state `run/tailscale/state`
+- config `run/tailscale/config.json`
+- shim operator `run/tailscale/bin/sudo` (wajib untuk proot; lihat STATUS.md)
 
 ```bash
-tailscaled --tun=userspace-networking \
-  --state=/var/lib/tailscale/tailscaled.state \
-  --socket=/var/run/tailscale/tailscaled.sock \
-  --socks5-server=127.0.0.1:1055 \
-  --outbound-http-proxy-listen=127.0.0.1:1055 &
+npm run ts:ensure     # tailscaled + funnel --bg 8791
+npm run ts:status     # state daemon + serve/funnel status
+npm run ts:url        # https://<node>.<tailnet>.ts.net
+bash scripts/tailscale.sh funnel-off   # matikan exposure (dipanggil stop.sh)
+```
 
-tailscale --socket=/var/run/tailscale/tailscaled.sock up \
-  --hostname=oc-proxy-termux \
+Login pertama (AuthURL dicetak ke terminal):
+
+```bash
+bin/tailscale --socket=run/tailscale/socket up \
+  --operator=container --hostname=oc-proxy \
   --accept-dns=false --accept-routes=false --netfilter-mode=off
-
-tailscale --socket=/var/run/tailscale/tailscaled.sock funnel --bg 8791
-tailscale --socket=/var/run/tailscale/tailscaled.sock funnel status
 ```
 
-Cek status:
+`scripts/start.sh` memanggil `ts:ensure` di background bila
+`TUNNEL_DISABLED=1` dan `PUBLIC_URL` berupa `*.ts.net`. Setelah reboot,
+jalankan `npm run bg` (atau `npm run ts:ensure`) untuk menyalakan kembali
+daemon dan Funnel; serve config tersimpan di state tailscaled.
 
-```bash
-npm run status
-tailscale --socket=/var/run/tailscale/tailscaled.sock status
-tailscale --socket=/var/run/tailscale/tailscaled.sock funnel status
-```
-
-Catatan: `CapEff=0`; jangan andalkan TUN, systemd, atau fitur kernel. Helper
-`scripts/tailscale.sh` belum dibuat. Setelah reboot, `tailscaled` dan Funnel
-perlu dijalankan ulang.
+Catatan: `CapEff=0`; jangan andalkan TUN, systemd, atau fitur kernel.
 
 ## Cloudflare Quick Tunnel (opsional)
 

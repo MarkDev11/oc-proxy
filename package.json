@@ -2,7 +2,7 @@
   "name": "oc-proxy",
   "version": "2.1.0",
   "private": true,
-  "description": "Thin OpenAI-compatible proxy for opencode.ai free tier. Runs locally and is exposed through a Cloudflare Quick Tunnel. Zero dependencies.",
+  "description": "Thin OpenAI-compatible proxy for opencode.ai free tier. Runs locally and is exposed through a Tailscale Funnel (Cloudflare Quick Tunnel optional). Zero dependencies.",
   "engines": {
     "node": ">=20.12.0"
   },
@@ -13,10 +13,18 @@
     "bg": "bash scripts/start.sh",
     "stop": "bash scripts/stop.sh",
     "status": "bash scripts/status.sh",
-    "warp:start": "bash scripts/warp_rotate.sh start",
-    "warp:stop": "bash scripts/warp_rotate.sh stop",
-    "warp:status": "bash scripts/warp_rotate.sh status",
-    "warp:once": "bash scripts/warp_rotate.sh once",
-    "check": "node --check serve-local.js && node --check lib/opencode.js && node --check lib/stats.js && node --check api/v1/models.js && node --check api/v1/chat/completions.js && node --check api/v1/messages.js && node --check api/v1/responses.js && node --check api/health.js && node --check scripts/up.js && echo OK"
+    "ts:ensure": "bash scripts/tailscale.sh ensure",
+    "ts:status": "bash scripts/tailscale.sh status",
+    "ts:url": "bash scripts/tailscale.sh url",
+    "warp:start": "bash scripts/wireproxy.sh start",
+    "warp:stop": "bash scripts/wireproxy.sh stop",
+    "warp:status": "bash scripts/wireproxy.sh status",
+    "warp:rotate": "bash scripts/wireproxy.sh rotate",
+    "warp:test": "bash scripts/wireproxy.sh test",
+    "warp:usque:start": "bash scripts/warp_rotate.sh start",
+    "warp:usque:stop": "bash scripts/warp_rotate.sh stop",
+    "warp:usque:status": "bash scripts/warp_rotate.sh status",
+    "warp:usque:once": "bash scripts/warp_rotate.sh once",
+    "check": "node --check serve-local.js && node --check lib/opencode.js && node --check lib/stats.js && node --check lib/warp.js && node --check scripts/warp_register.js && node --check api/v1/models.js && node --check api/v1/chat/completions.js && node --check api/v1/messages.js && node --check api/v1/responses.js && node --check api/health.js && node --check scripts/up.js && echo OK"
   }
 }

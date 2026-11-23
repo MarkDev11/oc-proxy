@@ -23,6 +23,18 @@ else
   echo "health: unreachable"
 fi
 
+if [[ "${WARP_ENGINE:-wireproxy}" == "usque" ]]; then
+  if [[ -f run/warp-rotate.pid || -f run/warp-once.pid ]]; then
+    bash scripts/warp_rotate.sh status 2>/dev/null |
+      awk 'NR==1{print "warp: "$0} NR==3{print "warp "$0} NR==7{print "warp "$0} NR==8{print "warp "$0} NR==9{print "warp "$0}'
+  else
+    echo "warp: stopped"
+  fi
+else
+  bash scripts/wireproxy.sh status 2>/dev/null | sed 's/^/warp: /'
+  echo "warp upstream: $(cat run/upstream-proxy.txt 2>/dev/null || echo direct)"
+fi
+
 if [[ -s run/tunnel-url.txt ]]; then
   echo "public: $(cat run/tunnel-url.txt)"
 elif [[ "${TUNNEL_DISABLED:-0}" == "1" ]]; then

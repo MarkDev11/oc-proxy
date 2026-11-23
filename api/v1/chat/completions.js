@@ -7,7 +7,11 @@ const {
   cors,
   checkAuth,
   isAllowedModel,
+  isSystemOneModel,
   buildUpstreamBody,
+  buildSystemOneBody,
+  systemOneUrl,
+  systemOneToChat,
   buildHeaders,
   upstreamUrl,
   newSessionId,
@@ -15,8 +19,10 @@ const {
   parseFrame,
   makeTranslator,
   summarizeBody,
+  upstreamFetchOptions,
 } = require("../../../lib/opencode");
 const stats = require("../../../lib/stats");
+const warp = require("../../../lib/warp");
 
 function readJson(req) {
   return new Promise((resolve, reject) => {
@@ -60,6 +66,7 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
   let attempt = 0;
   let lastError = null;
   let requestHeaders = headers;
+  let quotaRounds = 0;
 
   async function attemptFetch() {
     const ac = new AbortController();
@@ -72,7 +79,7 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
       ac.abort();
     }, timeoutMs);
     try {
-      return await fetch(url, { method: "POST", headers: requestHeaders, body, signal: ac.signal });
+      return await fetch(url, upstreamFetchOptions({ method: "POST", headers: requestHeaders, body, signal: ac.signal }));
     } catch (e) {
       if (timedOut) {
         throw Object.assign(new Error(`upstream timeout after ${timeoutMs}ms`), { code: "UPSTREAM_TIMEOUT" });
@@ -93,25 +100,53 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
       log?.write(`[upstream] status=${r.status} retry-after=${r.headers.get("retry-after") || "0"}s`);
       if (!RETRYABLE_STATUS.has(r.status)) return r;
       const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10) || 0;
-      // A long 429 retry-after is often a generic free-quota marker. Try one
-      // short retry with a fresh session before failing fast; a new request
-      // frequently succeeds even when the old one gets ~46k seconds.
-      if (r.status === 429 && retryAfter > 300) {
-        if (attempt === 1 && refreshHeaders) {
-          console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; retrying once with fresh session`);
-          log?.write(`[upstream] 429 retry-after ${retryAfter}s; retry once with fresh session`);
+      // A 429 whose body says FreeUsageLimitError is a per-model, per-egress
+      // quota. Hold the request while rotating WARP like opencode-hop: keep
+      // trying fresh addresses, no cooldown, and only give the 429 back after
+      // every round has failed.
+      if (r.status === 429) {
+        const quota = await warp.isQuotaResponse(r);
+        if (quota && refreshHeaders && !signal?.aborted) {
+          if (quotaRounds >= warp.QUOTA_ROUNDS) {
+            console.warn("[oc-proxy] FreeUsageLimitError; all rotation rounds exhausted");
+            log?.write("[upstream] quota rotations exhausted");
+            return quotaExhaustedResponse();
+          }
+          const remaining = warp.QUOTA_ROUNDS - quotaRounds;
           try {
             await r.body?.cancel();
           } catch {}
           requestHeaders = refreshHeaders();
-          await sleep(1500);
-          continue;
+          const rotated = await warp.waitForQuotaEgress({
+            rounds: remaining,
+            onRound: (round, total) => {
+              quotaRounds++;
+              console.warn(`[oc-proxy] FreeUsageLimitError; WARP rotation ${round}/${total}`);
+              log?.write(`[upstream] quota hit; WARP rotation ${round}/${total}`);
+            },
+          });
+          log?.write(`[upstream] egress rotation ${rotated ? "ok" : "exhausted"}`);
+          if (rotated) continue;
+          return quotaExhaustedResponse();
         }
-        console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
-        log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
-        return r;
+        if (retryAfter > 300) {
+          // Non-quota long 429: try one short retry with a fresh session.
+          if (attempt === 1 && refreshHeaders) {
+            console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; retrying once with fresh session`);
+            log?.write(`[upstream] 429 retry-after ${retryAfter}s; retry once with fresh session`);
+            try {
+              await r.body?.cancel();
+            } catch {}
+            requestHeaders = refreshHeaders();
+            await sleep(1500);
+            continue;
+          }
+          console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
+          log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
+          return r;
+        }
+        if (refreshHeaders) requestHeaders = refreshHeaders();
       }
-      if (r.status === 429 && refreshHeaders) requestHeaders = refreshHeaders();
       const backoff = Math.min(30000, baseDelay * 2 ** (attempt - 1));
       // 429 retry-after is usually a generic "until midnight" value; cap it.
       // 5xx are transient connect timeouts, so retry quickly instead of
@@ -161,6 +196,137 @@ async function forwardUpstreamError(upstream) {
   return { status: upstream.status >= 400 ? upstream.status : 502, body };
 }
 
+function quotaExhaustedResponse() {
+  return new Response(
+    JSON.stringify({
+      type: "error",
+      error: {
+        type: "FreeUsageLimitError",
+        message: "Free usage limit reached on every rotated WARP egress.",
+      },
+    }),
+    { status: 429, headers: { "content-type": "application/json", "retry-after": "60" } }
+  );
+}
+
+async function handleSystemOne(req, res, chatBody) {
+  const displayModel = String(chatBody.model);
+  const clientWantsStream = chatBody.stream === true;
+  const t0 = Date.now();
+  let upBody;
+  try {
+    upBody = buildSystemOneBody(chatBody);
+  } catch (e) {
+    req.log?.write(`[systemone] build failed: ${e.message}`);
+    return res.status(400).json({ error: { message: e.message } });
+  }
+
+  if (req.log) {
+    req.log.write("=== SYSTEMONE REQUEST BODY ===");
+    const full = JSON.stringify(upBody);
+    req.log.raw(full.slice(0, 4 * 1024 * 1024) + (full.length > 4 * 1024 * 1024 ? "\n[truncated]\n" : "\n"));
+  }
+
+  const configuredSession = (() => {
+    const s = String(process.env.OPENCODE_SESSION || "").trim();
+    return /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(s) ? s : null;
+  })();
+  const incomingSession =
+    req.headers["x-opencode-session"] ||
+    req.headers["x-opencode-session-id"] ||
+    req.headers["x-session-id"] ||
+    configuredSession;
+  const makeHeaders = () =>
+    buildHeaders({
+      sessionId: incomingSession || newSessionId(),
+      userAgent: req.headers["user-agent"],
+    });
+
+  let upstream;
+  try {
+    upstream = await fetchUpstream(systemOneUrl(), {
+      headers: makeHeaders(),
+      refreshHeaders: makeHeaders,
+      body: JSON.stringify(upBody),
+      signal: req.signal,
+      log: req.log,
+    });
+  } catch (e) {
+    req.log?.write(`[systemone] upstream unreachable: ${e.message}`);
+    stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
+    return res.status(502).json({ error: { message: `upstream unreachable: ${e.message}` } });
+  }
+
+  if (!upstream.ok || !upstream.body) {
+    req.log?.write(`[systemone] final status=${upstream.status}`);
+    const err = await forwardUpstreamError(upstream);
+    const retryAfter = upstream.headers.get("retry-after");
+    if (retryAfter) res.setHeader("Retry-After", retryAfter);
+    stats.record({ m: displayModel, ok: false, st: err.status, ms: Date.now() - t0, fin: "error" });
+    return res.status(err.status).json(err.body);
+  }
+
+  let json;
+  try {
+    json = await upstream.json();
+  } catch (e) {
+    req.log?.write(`[systemone] invalid JSON: ${e.message}`);
+    stats.record({ m: displayModel, ok: false, st: 502, ms: Date.now() - t0, fin: "error" });
+    return res.status(502).json({ error: { message: `invalid systemone response: ${e.message}` } });
+  }
+  req.log?.raw(JSON.stringify(json));
+
+  const out = systemOneToChat(json, displayModel);
+  const usage = out.usage;
+
+  if (!clientWantsStream) {
+    stats.record({
+      m: displayModel,
+      ok: true,
+      st: 200,
+      p: usage.prompt_tokens || stats.est(upBody),
+      c: usage.completion_tokens || stats.est(out.choices[0].message.content),
+      ms: Date.now() - t0,
+      fin: "stop",
+    });
+    return res.status(200).json(out);
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
+  const base = { id: out.id, object: "chat.completion.chunk", created: out.created, model: displayModel };
+  res.write(
+    `data: ${JSON.stringify({
+      ...base,
+      choices: [
+        { index: 0, delta: { role: "assistant", content: out.choices[0].message.content }, finish_reason: null },
+      ],
+    })}\n\n`
+  );
+  res.write(
+    `data: ${JSON.stringify({
+      ...base,
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage,
+    })}\n\n`
+  );
+  res.write("data: [DONE]\n\n");
+  res.end();
+  stats.record({
+    m: displayModel,
+    ok: true,
+    st: 200,
+    p: usage.prompt_tokens || stats.est(upBody),
+    c: usage.completion_tokens || stats.est(out.choices[0].message.content),
+    ms: Date.now() - t0,
+    fin: "stop",
+  });
+}
+
 module.exports = async function handler(req, res) {
   cors(res);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -181,6 +347,10 @@ module.exports = async function handler(req, res) {
         message: `unsupported model '${chatBody.model}'. Use any *-free opencode model (e.g. deepseek-v4.1-flash-free).`,
       },
     });
+  }
+
+  if (isSystemOneModel(chatBody.model)) {
+    return handleSystemOne(req, res, chatBody);
   }
 
   const clientWantsStream = chatBody.stream === true;

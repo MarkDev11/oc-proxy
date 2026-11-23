@@ -17,6 +17,8 @@ const completions = require('./api/v1/chat/completions');
 const messages = require('./api/v1/messages');
 const responses = require('./api/v1/responses');
 const stats = require('./lib/stats');
+const warp = require('./lib/warp');
+const { checkAuth, cors } = require('./lib/opencode');
 
 const PORT = parseInt(process.env.PORT || '8791', 10);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -222,6 +224,30 @@ const server = http.createServer((req, res) => {
       if (u.pathname === '/api/health' || u.pathname === '/v1/health') return await health(r, w);
       if (u.pathname === '/api/stats' || u.pathname === '/v1/stats') return w.status(200).json(stats.snapshot());
       if (u.pathname === '/api/tunnel') return w.status(200).json({ url: readTunnelUrl() });
+      if (u.pathname === '/api/warp') {
+        cors(res);
+        if (!checkAuth(req)) return w.status(401).json({ error: { message: 'invalid api key' } });
+        return w.status(200).json(await warp.status());
+      }
+      if (u.pathname.startsWith('/api/warp/')) {
+        cors(res);
+        if (!checkAuth(req)) return w.status(401).json({ error: { message: 'invalid api key' } });
+        if (req.method !== 'POST') return w.status(405).json({ error: { message: 'method not allowed' } });
+        const action = u.pathname.slice('/api/warp/'.length);
+        try {
+          if (action === 'rotate') return w.status(202).json({ ok: true, action, pid: warp.rotate() });
+          if (action === 'start') return w.status(202).json({ ok: true, action, pid: warp.start() });
+          if (action === 'stop') return w.status(202).json({ ok: true, action, pid: warp.stop() });
+          if (action === 'upstream') {
+            let payload = {};
+            try { payload = JSON.parse(raw || '{}'); } catch {}
+            return w.status(200).json(warp.setUpstream(Boolean(payload.enabled)));
+          }
+        } catch (e) {
+          return w.status(e.status || 500).json({ error: { message: e.message || 'warp action failed' } });
+        }
+        return w.status(404).json({ error: { message: 'unknown warp action' } });
+      }
       if (u.pathname === '/api/v1/models' || u.pathname === '/v1/models') return await models(r, w);
       if (u.pathname === '/api/v1/chat/completions' || u.pathname === '/v1/chat/completions')
         return await completions(r, w);

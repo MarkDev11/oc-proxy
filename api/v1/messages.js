@@ -17,7 +17,9 @@ const {
   parseFrame,
   makeTranslator,
   summarizeBody,
+  upstreamFetchOptions,
 } = require("../../lib/opencode");
+const warp = require("../../lib/warp");
 
 function checkAnthropicAuth(req) {
   const need = (process.env.GATEWAY_API_KEY || "").trim();
@@ -277,6 +279,7 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
   const started = Date.now();
   let attempt = 0;
   let requestHeaders = headers;
+  let quotaRounds = 0;
 
   async function attemptFetch() {
     const ac = new AbortController();
@@ -289,7 +292,7 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
       ac.abort();
     }, timeoutMs);
     try {
-      return await fetch(url, { method: "POST", headers: requestHeaders, body, signal: ac.signal });
+      return await fetch(url, upstreamFetchOptions({ method: "POST", headers: requestHeaders, body, signal: ac.signal }));
     } catch (e) {
       if (timedOut) {
         throw Object.assign(new Error(`upstream timeout after ${timeoutMs}ms`), { code: "UPSTREAM_TIMEOUT" });
@@ -310,22 +313,48 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
       log?.write(`[upstream] status=${r.status} retry-after=${r.headers.get("retry-after") || "0"}s`);
       if (!RETRYABLE_STATUS.has(r.status)) return r;
       const retryAfter = parseInt(r.headers.get("retry-after") || "0", 10) || 0;
-      if (r.status === 429 && retryAfter > 300) {
-        if (attempt === 1 && refreshHeaders) {
-          console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; retrying once with fresh session`);
-          log?.write(`[upstream] 429 retry-after ${retryAfter}s; retry once with fresh session`);
+      if (r.status === 429) {
+        const quota = await warp.isQuotaResponse(r);
+        if (quota && refreshHeaders && !signal?.aborted) {
+          if (quotaRounds >= warp.QUOTA_ROUNDS) {
+            console.warn("[oc-proxy] FreeUsageLimitError; all rotation rounds exhausted");
+            log?.write("[upstream] quota rotations exhausted");
+            return quotaExhaustedResponse();
+          }
+          const remaining = warp.QUOTA_ROUNDS - quotaRounds;
           try {
             await r.body?.cancel();
           } catch {}
           requestHeaders = refreshHeaders();
-          await sleep(1500);
-          continue;
+          const rotated = await warp.waitForQuotaEgress({
+            rounds: remaining,
+            onRound: (round, total) => {
+              quotaRounds++;
+              console.warn(`[oc-proxy] FreeUsageLimitError; WARP rotation ${round}/${total}`);
+              log?.write(`[upstream] quota hit; WARP rotation ${round}/${total}`);
+            },
+          });
+          log?.write(`[upstream] egress rotation ${rotated ? "ok" : "exhausted"}`);
+          if (rotated) continue;
+          return quotaExhaustedResponse();
         }
-        console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
-        log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
-        return r;
+        if (retryAfter > 300) {
+          if (attempt === 1 && refreshHeaders) {
+            console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; retrying once with fresh session`);
+            log?.write(`[upstream] 429 retry-after ${retryAfter}s; retry once with fresh session`);
+            try {
+              await r.body?.cancel();
+            } catch {}
+            requestHeaders = refreshHeaders();
+            await sleep(1500);
+            continue;
+          }
+          console.warn(`[oc-proxy] upstream 429 retry-after ${retryAfter}s; not retrying (quota/rate limit)`);
+          log?.write(`[upstream] 429 retry-after ${retryAfter}s too long; not retrying`);
+          return r;
+        }
+        if (refreshHeaders) requestHeaders = refreshHeaders();
       }
-      if (r.status === 429 && refreshHeaders) requestHeaders = refreshHeaders();
       const backoff = Math.min(30000, baseDelay * 2 ** (attempt - 1));
       const delay =
         r.status === 429
@@ -357,6 +386,19 @@ async function fetchUpstream(url, { headers, refreshHeaders, body, signal, log }
       await sleep(delay);
     }
   }
+}
+
+function quotaExhaustedResponse() {
+  return new Response(
+    JSON.stringify({
+      type: "error",
+      error: {
+        type: "FreeUsageLimitError",
+        message: "Free usage limit reached on every rotated WARP egress.",
+      },
+    }),
+    { status: 429, headers: { "content-type": "application/json", "retry-after": "60" } }
+  );
 }
 
 module.exports = async function handler(req, res) {

@@ -2,6 +2,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+if [[ -x scripts/tailscale.sh ]]; then
+  bash scripts/tailscale.sh funnel-off >/dev/null 2>&1 || true
+fi
+
+if [[ -x scripts/wireproxy.sh ]]; then
+  bash scripts/wireproxy.sh stop >/dev/null 2>&1 || true
+fi
+
 if [[ -f run/warp-rotate.pid ]]; then
   bash scripts/warp_rotate.sh stop >/dev/null 2>&1 || true
 fi
